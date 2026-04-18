@@ -52,12 +52,15 @@ class AnatomyGraphAttention(nn.Module):
         self.adjacency = nn.Parameter(_build_adjacency_init(n_organs))
         # Frozen reference for the L_anatomy regularizer (||A - A_init||₂).
         self.register_buffer("_init_adjacency", _build_adjacency_init(n_organs).clone())
+        # Off-diagonal mask — zeros the self-loop column so an organ never attends
+        # to itself via the message pass (sigmoid(0)=0.5 would otherwise be a 50% self-loop).
+        self.register_buffer("_offdiag_mask", 1.0 - torch.eye(n_organs))
         self.w_msg = nn.Linear(embed_dim, embed_dim, bias=False)
         nn.init.zeros_(self.w_msg.weight)  # start as identity residual
 
     def forward(self, q: torch.Tensor) -> torch.Tensor:
         """q: (n_organs, embed_dim) → (n_organs, embed_dim)."""
-        A_soft = torch.sigmoid(self.adjacency)
+        A_soft = torch.sigmoid(self.adjacency) * self._offdiag_mask
         m = A_soft @ q
         return q + self.w_msg(m)
 

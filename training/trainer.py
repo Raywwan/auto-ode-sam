@@ -171,11 +171,16 @@ class WarmupCosineScheduler:
             setattr(self, k, v)
 
 
-def _extract_center_modality(modality_ids: torch.Tensor, is_3d: bool) -> torch.Tensor:
+def _extract_center_modality(modality_ids, is_3d: bool):
     """
     AMOS22_3D_Dataset returns modality_id of shape (B, D) — same modality replicated.
     Extract center slice to get (B,) for the model.
+
+    V4 multi-organ dataset doesn't emit modality_id at all, so None is a valid input
+    (caller sets modality_ids to None when the batch key is absent).
     """
+    if modality_ids is None:
+        return None
     if is_3d and modality_ids.dim() == 2:
         D = modality_ids.shape[1]
         return modality_ids[:, D // 2]
@@ -764,6 +769,7 @@ class Trainer:
 
         # Detect AutoODESAM: has .decoder but no .prompt_encoder
         is_auto_ode = hasattr(self.model, 'decoder') and not hasattr(self.model, 'prompt_encoder')
+        is_organflow = getattr(self.cfg.model, "architecture", None) == "organflow_sam2"
 
         pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch}",
                     leave=False, dynamic_ncols=True)
@@ -771,12 +777,40 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, batch in enumerate(pbar):
                 images = batch["image"].to(self.device)
-                masks = batch["mask"].to(self.device)
-                is_3d = batch.get("is_3d", torch.tensor([False]))
+                # V4 dataset returns "masks" (plural, 5-D) — read legacy "mask" only if present.
+                masks = batch["mask"].to(self.device) if "mask" in batch else None
+                is_3d = batch.get("is_3d", torch.tensor([True if is_organflow else False]))
                 if isinstance(is_3d, torch.Tensor):
                     is_3d = is_3d[0].item()
 
-                if is_auto_ode:
+                if is_organflow:
+                    # ---- OrganFlowSAM2 (V4) validation path ----
+                    images_v4 = images                                             # (B, D, 1, H, W)
+                    if images_v4.shape[2] == 1:
+                        images_v4 = images_v4.repeat(1, 1, 3, 1, 1)
+                    masks_v4 = batch["masks"].to(self.device)                      # (B, 15, D, H, W)
+                    present_v4 = batch["present_mask"].to(self.device)             # (B, 15) bool
+                    organ_id_v4 = torch.argmax(present_v4.int(), dim=1) + 1
+
+                    with autocast("cuda", enabled=self.use_amp):
+                        out = self.model(images_v4, organ_id_v4, is_3d=True)
+
+                    pm = out["masks"]                                              # (B, 15, h, w)
+                    idx = (organ_id_v4 - 1).long()
+                    H_v, W_v = pm.shape[-2:]
+                    best_masks = pm.gather(
+                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, H_v, W_v)
+                    ).squeeze(1)
+                    best_masks = torch.sigmoid(best_masks)
+
+                    D_v4 = masks_v4.shape[2]
+                    gt_center = masks_v4[:, :, D_v4 // 2, :, :]                    # (B, 15, H, W)
+                    Hg, Wg = gt_center.shape[-2:]
+                    masks = gt_center.gather(
+                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, Hg, Wg)
+                    ).squeeze(1).float()
+
+                elif is_auto_ode:
                     # ---- AutoODESAM validation path ----
                     organ_id_val = batch.get("organ_id", None)
                     if organ_id_val is not None:

@@ -118,3 +118,9 @@ class OrganFlowSAM2(nn.Module):
             "deepsup_logits": deepsup,
             "flow_targets": flow_targets,
         }
+
+    def count_parameters(self) -> Dict[str, int]:
+        """Return trainable + total param counts, as expected by the trainer."""
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return {"total": total, "trainable": trainable, "frozen": total - trainable}

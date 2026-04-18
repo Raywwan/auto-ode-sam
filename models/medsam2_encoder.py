@@ -10,6 +10,7 @@ Implementation uses timm's `hiera_tiny` (matches SAM2/MedSAM2 backbone) via
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Tuple
 
@@ -47,15 +48,17 @@ class LoRALinear(nn.Module):
         return y + delta
 
 
-def _inject_lora(module: nn.Module, rank: int) -> int:
+def _inject_lora(module: nn.Module, rank: int, alpha: float = None) -> int:
     """Replace every nn.Linear whose name is in {'qkv','proj','fc1','fc2'} with LoRALinear. Returns count."""
+    if alpha is None:
+        alpha = float(rank)
     n_replaced = 0
     for name, child in list(module.named_children()):
         if isinstance(child, nn.Linear) and name in ("qkv", "proj", "fc1", "fc2"):
-            setattr(module, name, LoRALinear(child, rank=rank))
+            setattr(module, name, LoRALinear(child, rank=rank, alpha=alpha))
             n_replaced += 1
         else:
-            n_replaced += _inject_lora(child, rank)
+            n_replaced += _inject_lora(child, rank, alpha)
     return n_replaced
 
 
@@ -74,9 +77,12 @@ class MedSAM2Encoder(nn.Module):
         embed_dim: int = 256,
         skip_channels: int = 128,
         lora_rank: int = 16,
+        lora_alpha: float = None,
         pretrained: bool = True,
     ) -> None:
         super().__init__()
+        if lora_alpha is None:
+            lora_alpha = float(lora_rank)  # standard LoRA practice: scale=1.0 when alpha=rank
         self.backbone = timm.create_model(
             "hiera_tiny_224",
             pretrained=False,
@@ -96,16 +102,32 @@ class MedSAM2Encoder(nn.Module):
             if ckpt_path.exists():
                 state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
                 sd = state.get("model", state)
-                # Extract just image_encoder keys if the ckpt is a full SAM2 state
+                # SAM2 names image-encoder keys `image_encoder.trunk.<X>`; timm's
+                # features_only wrapper prefixes every key with `model.`. Also, SAM2's
+                # Hiera uses `mlp.layers.{0,1}` while timm uses `mlp.{fc1,fc2}`.
+                # `pos_embed` is a shape mismatch (SAM2 4D windowed vs timm 3D tokens)
+                # and is dropped — it gets re-initialized and learns during fine-tune.
+                bb_sd = self.backbone.state_dict()
                 sd_enc = {}
+                dropped_shape = 0
                 for k, v in sd.items():
-                    if k.startswith("image_encoder.trunk."):
-                        sd_enc[k.replace("image_encoder.trunk.", "")] = v
-                    elif k.startswith("trunk."):
-                        sd_enc[k.replace("trunk.", "")] = v
+                    if not k.startswith("image_encoder.trunk."):
+                        continue
+                    stripped = k.replace("image_encoder.trunk.", "")
+                    stripped = re.sub(r"mlp\.layers\.0", "mlp.fc1", stripped)
+                    stripped = re.sub(r"mlp\.layers\.1", "mlp.fc2", stripped)
+                    target = "model." + stripped
+                    if target in bb_sd and bb_sd[target].shape == v.shape:
+                        sd_enc[target] = v
+                    else:
+                        dropped_shape += 1
                 if sd_enc:
                     missing, unexpected = self.backbone.load_state_dict(sd_enc, strict=False)
-                    print(f"[MedSAM2Encoder] loaded {len(sd_enc)} keys, missing={len(missing)}, unexpected={len(unexpected)}")
+                    print(f"[MedSAM2Encoder] loaded {len(sd_enc)} keys "
+                          f"(dropped {dropped_shape} due to name/shape mismatch), "
+                          f"missing={len(missing)}, unexpected={len(unexpected)}")
+                    if len(sd_enc) < 100:
+                        print(f"[MedSAM2Encoder] WARNING: only {len(sd_enc)} keys loaded — expected >= 120.")
                 else:
                     print(f"[MedSAM2Encoder] warning: no 'image_encoder.trunk.' keys in checkpoint — using random init.")
             else:
@@ -114,8 +136,9 @@ class MedSAM2Encoder(nn.Module):
         # Freeze all backbone params, then inject LoRA (which un-freezes its own params)
         for p in self.backbone.parameters():
             p.requires_grad = False
-        n_lora = _inject_lora(self.backbone, rank=lora_rank)
-        print(f"[MedSAM2Encoder] injected LoRA into {n_lora} Linear layers (rank={lora_rank})")
+        n_lora = _inject_lora(self.backbone, rank=lora_rank, alpha=lora_alpha)
+        print(f"[MedSAM2Encoder] injected LoRA into {n_lora} Linear layers "
+              f"(rank={lora_rank}, alpha={lora_alpha}, scale={lora_alpha/lora_rank:.3f})")
 
         # Projection heads (trainable)
         self.proj_main = nn.Conv2d(main_in_ch, embed_dim, kernel_size=1)
