@@ -21,3 +21,11 @@ def test_dataset_shape_and_dtype():
     assert sample["image"].dtype == torch.float32
     assert sample["masks"].dtype == torch.uint8
     assert sample["present_mask"].sum() >= 1
+    # Normalization invariant: clipped + rescaled to [0, 1]
+    assert sample["image"].min() >= 0.0 and sample["image"].max() <= 1.0
+    # Masks must be binary
+    assert set(torch.unique(sample["masks"]).tolist()).issubset({0, 1})
+    # present_mask consistency: marked-present organs must have ≥50 voxels in the sampled stack
+    for k in range(15):
+        if sample["present_mask"][k]:
+            assert sample["masks"][k].sum() >= 50
