@@ -38,7 +38,8 @@ class LoRALinear(nn.Module):
         self.lora_A = nn.Parameter(torch.zeros(rank, in_f))
         self.lora_B = nn.Parameter(torch.zeros(out_f, rank))
         nn.init.kaiming_uniform_(self.lora_A, a=5 ** 0.5)
-        # lora_B stays zero → LoRA contribution starts at zero
+        # lora_B stays zero → delta=0 and lora_A.grad=0 at step 0 (standard LoRA init);
+        # both unlock after the first lora_B update.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = self.base(x)
@@ -93,7 +94,7 @@ class MedSAM2Encoder(nn.Module):
         if pretrained:
             ckpt_path = Path(__file__).resolve().parents[1] / "checkpoints" / "medsam2" / "MedSAM2_hiera_tiny.pt"
             if ckpt_path.exists():
-                state = torch.load(str(ckpt_path), map_location="cpu")
+                state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
                 sd = state.get("model", state)
                 # Extract just image_encoder keys if the ckpt is a full SAM2 state
                 sd_enc = {}
@@ -126,11 +127,10 @@ class MedSAM2Encoder(nn.Module):
         """x: (B, 3, H, W) → (main (B, embed, H/16, W/16), skip (B, skip_ch, H/8, W/8))."""
         feats = self.backbone(x)
         skip_raw, main_raw = feats[0], feats[1]  # (B, 192, H/8, W/8), (B, 384, H/16, W/16)
-        # Hiera may return NHWC in some timm versions; normalize to NCHW
-        if skip_raw.dim() == 4 and skip_raw.shape[-1] in (192, 96, 384, 768):
-            skip_raw = skip_raw.permute(0, 3, 1, 2).contiguous()
-        if main_raw.dim() == 4 and main_raw.shape[-1] in (192, 96, 384, 768):
-            main_raw = main_raw.permute(0, 3, 1, 2).contiguous()
+        # timm 1.0.22 returns NCHW from features_only; assert it so any future
+        # layout change fails loudly instead of silently mis-shaping downstream.
+        assert skip_raw.shape[1] == 192, f"Expected C=192 at dim 1 (NCHW), got {skip_raw.shape}"
+        assert main_raw.shape[1] == 384, f"Expected C=384 at dim 1 (NCHW), got {main_raw.shape}"
         main = self.proj_main(main_raw)
         skip = self.proj_skip(skip_raw)
         return main, skip
