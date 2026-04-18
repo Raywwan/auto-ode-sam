@@ -1,0 +1,120 @@
+# =============================================================================
+# v4_organflow_sam2_256px.yaml — OrganFlow-SAM2 V4 full 15-organ training
+#
+# Architecture:
+#   MedSAM2 Hiera-Tiny + LoRA-16 → PFESA++ → Flow-matched organ-conditioned
+#   ODE → Anatomy-Graph query decoder (15 shared-MLP mask logits).
+#
+# Supervision:
+#   L_mask (center slice, BCE+Dice, only over present organs)
+#   + 0.5 · L_flow  (warmup: 0 → 0.5 over epochs 0..3)
+#   + 0.1 · L_deepsup (multi-label BCE on ODE-midpoint deep-sup head)
+#   + 0.01 · L_anatomy (MSE(A, A_init) on graph adjacency)
+#
+# Data: AMOS22 CT cases 1–500; depth=8, 256×256, per-volume multi-organ stacks.
+# Go-gate: val_dice ≥ 0.15 by epoch 5 (otherwise stop & debug).
+# =============================================================================
+
+experiment:
+  name: "v4_organflow_sam2_256px"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "organflow_sam2"
+  img_size: 256
+  embed_dim: 256
+  skip_channels: 128
+  encoder:
+    pretrained: true
+    lora_rank: 16
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 4
+    transformer_mlp_dim: 2048
+  graph:
+    n_organs: 15
+
+data:
+  dataset: "amos22_multiorgan"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  img_size: 256
+  slices_per_volume: 8
+  target_organs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  num_classes: 1
+
+training:
+  epochs: 120
+  batch_size: 4
+  grad_accumulation_steps: 2         # Effective batch = 8
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+
+  optimizer: "adamw"
+  lr: 3.0e-4                          # lr_new for decoder/ODE/head
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 3
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  # V4-specific
+  flow_warmup_epochs: 3               # linear λ_flow ramp 0 → lambda_flow
+  lambda_flow: 0.5
+  lambda_deepsup: 0.1
+  lambda_anatomy: 0.01
+
+  # Legacy V3 features — OFF for V4 (multi-organ V4 branch handles its own loss)
+  all_slice_supervision: false
+  cutmix_prob: 0.0
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+  boundary_ramp_epoch: 50
+
+  # CombinedLoss placeholder (constructed in trainer __init__, unused by V4 branch)
+  loss:
+    w_dice:   0.5
+    w_focal:  0.0
+    w_cldice: 0.0
+    w_iou:    0.0
+    w_boundary: 0.0
+    w_dice_topk: 0.0
+    w_deepsup: 0.0
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 5
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 5
+  vis_every_n_epochs: 10
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: false
+  compute_nsd: false
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  log_every_n_steps: 50
+  log_images: false
