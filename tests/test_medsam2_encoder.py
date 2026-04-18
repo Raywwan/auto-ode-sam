@@ -25,5 +25,5 @@ def test_encoder_lora_only_trainable():
 def test_encoder_trainable_param_count_reasonable():
     enc = MedSAM2Encoder(embed_dim=256, lora_rank=16, pretrained=False)
     n_trainable = sum(p.numel() for p in enc.parameters() if p.requires_grad)
-    # LoRA deltas (~4M) + projection heads (~0.2M) < total (~38M)
-    assert 1e6 < n_trainable < 10e6, f"Trainable {n_trainable} outside expected band"
+    # With out_indices=[1,2] and LoRA on {qkv,proj,fc1,fc2}: ~940K active LoRA + ~120K proj heads
+    assert 5e5 < n_trainable < 10e6, f"Trainable {n_trainable} outside expected band"

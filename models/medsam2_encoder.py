@@ -80,11 +80,11 @@ class MedSAM2Encoder(nn.Module):
             "hiera_tiny_224",
             pretrained=False,
             features_only=True,
-            out_indices=[1, 2, 3],  # build full backbone; tap stride-8 (192ch) and stride-16 (384ch)
+            out_indices=[1, 2],  # tap stride-8 (192ch) and stride-16 (384ch); stage-3 excluded to avoid dead LoRA params
             img_size=256,
         )
         fi = self.backbone.feature_info
-        # feature_info lists all 4 stages (0–3); out_indices=[1,2,3] returns feats[0..2]
+        # feature_info lists all 4 stages (0–3); out_indices=[1,2] returns feats[0..1]
         # feats[0] ← fi[1]: stage-1, 192ch, stride-8  (skip tap)
         # feats[1] ← fi[2]: stage-2, 384ch, stride-16 (main tap)
         skip_in_ch = fi[1]["num_chs"]   # 192ch
