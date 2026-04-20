@@ -24,7 +24,9 @@ model:
     patch_size: 96
     feature_size: 48
     use_v2: true
-    pretrained_weights: null
+    # MONAI SSL SwinViT (BTCV/AMOS-class, 5050-vol CT pretrain). 392 MB.
+    # Fetched once via: scripts/fetch_pretrained.py (idempotent).
+    pretrained_weights: "checkpoints/pretrained/model_swinvit.pt"
 
   skip_channels: 128
   skip_fine_channels: 64
