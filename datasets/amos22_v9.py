@@ -65,14 +65,65 @@ class AMOS22V9Dataset(Dataset):
         self.length = len(self.volume_ids) * slabs_per_volume
 
     def _discover_volumes(self) -> List[str]:
+        """Enumerate CT-only volume IDs for this split.
+
+        Prefers `preprocessed/*.pt` (1.5 mm isotropic, HU-normalised). Falls
+        back to `imagesTr|Va/*.nii.gz` when preprocessed cache is missing.
+
+        AMOS22 convention: amos_0001..amos_0500 are CT, amos_0501..amos_0600
+        are MRI. We keep CT only for V9.
+
+        Split policy when using preprocessed cache (no separate val dir for
+        preprocessed files): deterministic 90 / 10 by sorted ID — last 10 %
+        of CT IDs go to val. Upgrade to 5-fold CV in Stage 3.
+        """
+        import re
+        pre = self.root / "preprocessed"
+        if pre.exists():
+            all_ids = []
+            for p in pre.glob("*.pt"):
+                m = re.match(r"amos_(\d+)", p.stem)
+                if not m:
+                    continue
+                num = int(m.group(1))
+                if num > 500:  # MRI — skip
+                    continue
+                all_ids.append((num, p.stem))
+            all_ids.sort()
+            cut = int(round(len(all_ids) * 0.9))
+            chosen = all_ids[:cut] if self.split == "train" else all_ids[cut:]
+            return [stem for _, stem in chosen]
+
+        # Fallback: raw NIfTI under imagesTr / imagesVa.
         imdir = self.root / ("imagesTr" if self.split == "train" else "imagesVa")
         if not imdir.exists():
             return []
-        return sorted(p.name.replace(".nii.gz", "") for p in imdir.glob("*.nii.gz"))
+        out = []
+        for p in imdir.glob("*.nii.gz"):
+            stem = p.name.replace(".nii.gz", "")
+            m = re.match(r"amos_(\d+)", stem)
+            if m and int(m.group(1)) <= 500:
+                out.append(stem)
+        return sorted(out)
 
     def _load_volume(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
-        import nibabel as nib
         vol_id = self.volume_ids[idx % len(self.volume_ids)]
+        pre_path = self.root / "preprocessed" / f"{vol_id}.pt"
+        if pre_path.exists():
+            import torch as _t
+            d = _t.load(str(pre_path), map_location="cpu", weights_only=False)
+            # Preprocessed layout: (1, H, W, D) float32 in [0, 1]; label int8 same.
+            img = d["image"][0].numpy()                              # (H, W, D)
+            lab = d["label"][0].numpy().astype(np.int64)              # (H, W, D)
+            img = np.transpose(img, (2, 0, 1))                       # (D, H, W)
+            lab = np.transpose(lab, (2, 0, 1))
+            # Preprocessed is already HU-normalised to [0, 1]; undo to raw HU
+            # so downstream hu_clip normalisation is consistent with nii fallback.
+            img = img * (self.hu_clip[1] - self.hu_clip[0]) + self.hu_clip[0]
+            return img.astype(np.float32), lab
+
+        # Fallback: raw NIfTI. NOTE: this path does NOT resample to 1.5 mm.
+        import nibabel as nib
         imdir = self.root / ("imagesTr" if self.split == "train" else "imagesVa")
         lbdir = self.root / ("labelsTr" if self.split == "train" else "labelsVa")
         img = nib.load(str(imdir / f"{vol_id}.nii.gz")).get_fdata().astype(np.float32)
