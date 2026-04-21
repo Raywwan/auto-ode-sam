@@ -17,10 +17,13 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import torch
+import torch.nn.functional as F
 
 from models.voluformer_v9 import VoluFormerV9
 from losses.flow_shape_prior import FlowShapePriorLoss
 from losses.cascade_consistency import CascadeConsistencyLoss
+from losses.teacher_distill import TeacherDistillLoss
+from losses.cross_modal_contrastive import CrossModalInfoNCE
 from models.boundary_ddpm import BoundaryDDPM
 
 
@@ -33,10 +36,12 @@ class V9Trainer:
 
         lw = cfg.loss
         self.w = {
-            "flow_shape_prior":  float(getattr(lw, "flow_shape_prior", 0.0)),
-            "cascade_kl":        float(getattr(lw, "cascade_consistency_kl", 0.0)),
-            "cascade_dice":      float(getattr(lw, "cascade_consistency_dice", 0.0)),
-            "boundary_ddpm":     float(getattr(lw, "boundary_ddpm", 0.0)),
+            "flow_shape_prior":    float(getattr(lw, "flow_shape_prior", 0.0)),
+            "cascade_kl":          float(getattr(lw, "cascade_consistency_kl", 0.0)),
+            "cascade_dice":        float(getattr(lw, "cascade_consistency_dice", 0.0)),
+            "boundary_ddpm":       float(getattr(lw, "boundary_ddpm", 0.0)),
+            "teacher_distill":     float(getattr(lw, "teacher_distill", 0.0)),
+            "cross_modal_infonce": float(getattr(lw, "cross_modal_infonce", 0.0)),
         }
 
         self.losses: Dict[str, torch.nn.Module] = {}
@@ -52,6 +57,35 @@ class V9Trainer:
             )
         if self.w["boundary_ddpm"] > 0:
             self.losses["boundary_ddpm"] = BoundaryDDPM(n_organs=cfg.model.n_organs)
+
+        # Novel #3 — teacher-ensemble distillation. Teachers are optional; the
+        # loss returns zero + logs a warning if none load. The proposer's
+        # distill hooks are registered on first forward pass (see set_stage).
+        if self.w["teacher_distill"] > 0:
+            fs = int(getattr(cfg.model.proposer, "feature_size", 48))
+            # SwinUNETR v2 MLP output channels double per stage: fs, 2*fs, 4*fs.
+            student_taps = {
+                "swinViT.layers1.blocks.1.mlp": fs,
+                "swinViT.layers2.blocks.1.mlp": 2 * fs,
+                "swinViT.layers3.blocks.1.mlp": 4 * fs,
+            }
+            self.losses["teacher_distill"] = TeacherDistillLoss(
+                student_taps=student_taps,
+                teachers=("sam2", "dinov2", "biomedclip"),
+                n_organs=cfg.model.n_organs,
+            )
+            try:
+                model.proposer.register_distill_hooks(tuple(student_taps.keys()))
+                print("[V9Trainer] registered SwinUNETR distill hooks")
+            except Exception as e:  # pragma: no cover
+                print(f"[V9Trainer] WARN: failed to register distill hooks: {e}")
+
+        # Novel #5 — cross-modal InfoNCE. BiomedCLIP lazy-loaded on first call.
+        if self.w["cross_modal_infonce"] > 0:
+            self.losses["cross_modal_infonce"] = CrossModalInfoNCE(
+                embed_dim=int(cfg.model.embed_dim),
+                n_organs=cfg.model.n_organs,
+            )
 
         self._best_val = -1.0
         self._drops_in_a_row = 0
@@ -87,6 +121,36 @@ class V9Trainer:
             gt = batch["mask_slab"][:, :, center]
             extra["l_ddpm"] = self.w["boundary_ddpm"] * \
                 self.losses["boundary_ddpm"].training_loss(img2d, coarse, gt)
+
+        # Novel #3 — teacher-ensemble distillation. Only fires when hooks were
+        # registered AND at least one teacher loaded.
+        if "teacher_distill" in self.losses:
+            prop = out.get("proposer", {})
+            feats = prop.get("distill_feats", {}) if isinstance(prop, dict) else {}
+            td_mod = self.losses["teacher_distill"]
+            if feats and not td_mod.is_noop():
+                td_out = td_mod(feats, batch["volume"], batch["organ_id"])
+                extra["l_distill"] = self.w["teacher_distill"] * td_out["loss"]
+
+        # Novel #5 — cross-modal (organ-text) InfoNCE. Pool `center_feat` over
+        # the slab-centre organ mask to get an organ-conditioned image feat.
+        if "cross_modal_infonce" in self.losses and "slab" in batch:
+            cfeat = refiner.get("center_feat", None)
+            if cfeat is not None:
+                xm_mod = self.losses["cross_modal_infonce"]
+                center = int(batch["slab_center_z"][0].item())
+                mask_center = batch["mask_slab"][:, :, center]     # (B, K, H, W)
+                B = cfeat.shape[0]
+                k_idx = organ_id.clamp(0, mask_center.shape[1] - 1)
+                organ_mask = mask_center[torch.arange(B, device=cfeat.device), k_idx]
+                fh, fw = cfeat.shape[-2:]
+                gt_lr = F.interpolate(
+                    organ_mask[:, None].float(), size=(fh, fw), mode="area",
+                )
+                area = gt_lr.sum(dim=(2, 3)).clamp_min(1e-6)
+                pooled = (cfeat * gt_lr).sum(dim=(2, 3)) / area   # (B, C)
+                xm_out = xm_mod(pooled, organ_id)
+                extra["l_xmodal"] = self.w["cross_modal_infonce"] * xm_out["loss"]
 
         return extra
 

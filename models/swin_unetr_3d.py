@@ -123,15 +123,28 @@ class SwinUNETRProposer(nn.Module):
                 remap[nk] = v
             state = remap
 
+        # Drop keys whose shape doesn't match the target — happens when the
+        # checkpoint uses feature_size != current model (e.g. SSL is fs=48 but
+        # the smoke uses fs=24). strict=False only handles missing keys, not
+        # shape mismatches, so we must filter here.
+        target = self.net.state_dict()
+        kept, dropped_shape = {}, 0
+        for k, v in state.items():
+            if k in target and target[k].shape == v.shape:
+                kept[k] = v
+            else:
+                dropped_shape += int(k in target)
+        state = kept
+
         missing, unexpected = self.net.load_state_dict(state, strict=strict)
         # Count how many encoder params actually got filled.
         filled = sum(
             1 for k in self.net.state_dict()
-            if k.startswith("swinViT.") and k not in missing
+            if k.startswith("swinViT.") and k in state
         )
         total_enc = sum(1 for k in self.net.state_dict() if k.startswith("swinViT."))
         print(f"[SwinUNETRProposer] loaded {path}")
-        print(f"[SwinUNETRProposer]   encoder keys filled: {filled}/{total_enc}")
+        print(f"[SwinUNETRProposer]   encoder keys filled: {filled}/{total_enc}   shape-dropped: {dropped_shape}")
         print(f"[SwinUNETRProposer]   missing={len(missing)} unexpected={len(unexpected)}")
 
     def forward(self, volume: torch.Tensor) -> Dict[str, torch.Tensor]:
