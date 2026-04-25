@@ -14,7 +14,7 @@ counterpart (TotSeg has prostate-male only via separate task) — we treat it
 as AMOS-only for Phase I and rely on AMOS22 fine-tune to recover it.
 """
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import numpy as np
 
 # AMOS organ id -> list of TotalSeg class IDs that should remap to it.
@@ -50,7 +50,7 @@ def remap_label_volume(label: np.ndarray) -> np.ndarray:
     """Map a TotalSeg label volume to AMOS22 indices.
 
     Any TS class not in TOTALSEG_TO_AMOS22 is mapped to 0 (background).
-    Preserves dtype = int64 and shape.
+    Output dtype is always int64 (forced via dtype= override). Preserves shape.
     """
     out = np.zeros_like(label, dtype=np.int64)
     for ts_id, amos_id in TOTALSEG_TO_AMOS22.items():

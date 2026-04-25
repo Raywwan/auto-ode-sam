@@ -40,5 +40,5 @@ def test_remap_drops_unmapped_classes():
     assert out[0, 0] == 0
     assert out[0, 1] == 1  # spleen
     assert out[0, 2] == 0  # unknown → bg
-    # ts 14 may map to something or to 0; check it does not crash
+    assert out[0, 3] == 0  # ts 14 (spinal_cord) is unmapped → bg
     assert out.dtype == np.int64
