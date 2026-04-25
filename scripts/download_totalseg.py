@@ -26,7 +26,7 @@ EXPECTED_SIZE_GB_MAX = 35
 
 
 def _download(url: str, out: Path) -> None:
-    print(f"[totalseg-dl] starting download → {out}")
+    print(f"[totalseg-dl] starting download -> {out}")
     start = time.time()
     with urllib.request.urlopen(url) as resp, open(out, "wb") as f:
         total_bytes = int(resp.headers.get("Content-Length", 0))
@@ -47,7 +47,7 @@ def _download(url: str, out: Path) -> None:
 
 
 def _extract(zip_path: Path, out_dir: Path) -> None:
-    print(f"[totalseg-dl] extracting → {out_dir}")
+    print(f"[totalseg-dl] extracting -> {out_dir}")
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(out_dir)
     print("[totalseg-dl] extracted")
@@ -78,7 +78,7 @@ def main():
     if not args.skip_download:
         if zip_path.exists():
             sz = zip_path.stat().st_size / 1e9
-            print(f"[totalseg-dl] zip already present ({sz:.1f} GB) — skipping download")
+            print(f"[totalseg-dl] zip already present ({sz:.1f} GB) - skipping download")
         else:
             _download(ZENODO_URL, zip_path)
 
