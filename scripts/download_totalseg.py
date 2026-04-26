@@ -54,10 +54,13 @@ def _extract(zip_path: Path, out_dir: Path) -> None:
 
 
 def _build_manifest(data_root: Path) -> dict:
-    base = data_root / "Totalsegmentator_dataset_v201"
-    if not base.exists():
-        raise FileNotFoundError(f"Expected {base} after extract")
+    # The v201 Zenodo zip extracts s* directories at data_root level (not into a
+    # subdir). Older zips nested under Totalsegmentator_dataset_v201/. Handle both.
+    candidate_subdir = data_root / "Totalsegmentator_dataset_v201"
+    base = candidate_subdir if candidate_subdir.exists() else data_root
     vols = sorted([p.name for p in base.glob("s*") if (p / "ct.nii.gz").exists()])
+    if not vols:
+        raise FileNotFoundError(f"No sNNNN volumes with ct.nii.gz found under {base}")
     manifest = {"data_root": str(base), "n_volumes": len(vols), "volume_ids": vols}
     out = data_root / "totalsegmentator_manifest.json"
     out.write_text(json.dumps(manifest, indent=2))
@@ -87,7 +90,10 @@ def main():
         print(f"[totalseg-dl] WARNING: zip size {sz_gb:.1f} GB outside "
               f"expected [{EXPECTED_SIZE_GB_MIN}, {EXPECTED_SIZE_GB_MAX}] GB")
 
-    if not (args.data_root / "Totalsegmentator_dataset_v201").exists():
+    # Skip extract if either the legacy subdir or top-level sNNNN dirs already exist.
+    has_subdir = (args.data_root / "Totalsegmentator_dataset_v201").exists()
+    has_topvol = any((args.data_root / "s0000").exists(), )
+    if not (has_subdir or has_topvol):
         _extract(zip_path, args.data_root)
 
     manifest = _build_manifest(args.data_root)
