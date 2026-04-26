@@ -30,6 +30,12 @@ _TS_FILENAME_TO_AMOS = {
     "esophagus": 5, "liver": 6, "stomach": 7, "aorta": 8,
     "inferior_vena_cava": 9, "pancreas": 10,
     "adrenal_gland_right": 11, "adrenal_gland_left": 12, "duodenum": 13,
+    "urinary_bladder": 14,
+    # AMOS22 class 15 = prostate_uterus. TotalSeg v2 has prostate but no
+    # uterus annotation; female subjects therefore contribute no foreground to
+    # this channel (consistent with AMOS22's mixed-sex labelling). Prostate
+    # alone still gives the GATE-I-critical prostate channel real signal.
+    "prostate": 15,
 }
 
 
