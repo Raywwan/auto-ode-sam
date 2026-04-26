@@ -1,0 +1,79 @@
+# OrganMoE-3D Phase I — TotalSegmentator pretraining.
+# 10 ep VoCo-L on TotalSeg -> save ckpt to use as warmstart for AMOS22 FT.
+# OrganMoE adapters NOT enabled here (pretrain just adapts the decoder to
+# the 13-shared-organ subset; OrganMoE turns on only at AMOS22 fine-tune).
+
+experiment:
+  name: "voco_totalseg_pretrain"
+  seed: 42
+  output_dir: "checkpoints/voco_totalseg_pretrain"
+  log_dir: "logs/voco_totalseg_pretrain"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+  proposer:
+    patch_size: 96
+    feature_size: 96
+    use_v2: true
+    pretrained_weights: "checkpoints/pretrained/voco/VoComni_L.pt"
+    deep_supervision: false
+    use_organmoe: false           # only enabled at AMOS22 FT
+    lora_rank: 32                 # standard LoRA for pretrain
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode: { n_organs: 15, organ_emb_dim: 32, ode_hidden: 128, n_freqs: 6, substeps: 4 }
+  decoder: { n_organs: 15, transformer_depth: 6, transformer_mlp_dim: 3072 }
+  graph: { n_organs: 15 }
+  dynamic_pfesa: { enabled: false }
+  boundary_ddpm: { enabled: false }
+
+data:
+  dataset: "totalsegmentator"
+  data_root: "D:/data/totalsegmentator"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  slabs_per_volume: 4
+  copy_paste_prob: 0.0
+
+training:
+  stage: 1
+  epochs: 10
+  batch_size: 1
+  num_workers: 2
+  optimizer: { name: "adamw", lr: 3.0e-5, weight_decay: 0.05 }
+  scheduler: { name: "cosine", warmup_epochs: 1 }
+  amp: true
+  amp_dtype: "bf16"
+  grad_clip: 1.0
+  loss_small_organ: true        # use SmallOrganLoss as base seg loss
+  loss_small_organ_cfg: { dice_weight: 1.0, tversky_weight: 1.0, focal_weight: 0.5,
+                          tversky_alpha: 0.3, tversky_beta: 0.7, focal_gamma: 1.5 }
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.0
+  flow_weight: 0.0
+  deepsup_weight: 0.0
+
+eval:
+  every_n_epochs: 1
+  patch_size: 96
+  stride: 48
+  tta: false                    # skip during pretrain to save time
+  connected_component: false
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.05      # looser since cross-dataset
+  max_peak_vram_gb: 23
+  warmstart_missing_key_frac: 0.05
