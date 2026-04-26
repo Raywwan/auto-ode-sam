@@ -291,7 +291,8 @@ def _val_metrics(
     return metrics
 
 
-def train(cfg, train_ds=None, val_ds=None) -> None:
+def train(cfg, train_ds=None, val_ds=None, train_sampler=None,
+          loss_fn=None, warmstart_proposer_ckpt=None) -> None:
     device = _device(cfg)
     print(f"[train_v9] device={device}  stage={cfg.training.stage}")
 
@@ -349,11 +350,20 @@ def train(cfg, train_ds=None, val_ds=None) -> None:
         )
     print(f"[train_v9] train vols={len(train_ds.volume_ids)}  val vols={len(val_ds.volume_ids)}")
 
-    train_loader = DataLoader(
-        train_ds, batch_size=cfg.training.batch_size, shuffle=True,
-        num_workers=cfg.training.num_workers, pin_memory=(device.type == "cuda"),
-        drop_last=True,
-    )
+    if train_sampler is not None:
+        train_loader = DataLoader(
+            train_ds, batch_sampler=train_sampler,
+            num_workers=cfg.training.num_workers,
+            pin_memory=(device.type == "cuda"),
+        )
+        print(f"[train_v9] using injected train_sampler "
+              f"({type(train_sampler).__name__})")
+    else:
+        train_loader = DataLoader(
+            train_ds, batch_size=cfg.training.batch_size, shuffle=True,
+            num_workers=cfg.training.num_workers, pin_memory=(device.type == "cuda"),
+            drop_last=True,
+        )
     val_loader = DataLoader(
         val_ds, batch_size=cfg.training.batch_size, shuffle=False,
         num_workers=cfg.training.num_workers, pin_memory=(device.type == "cuda"),
@@ -363,8 +373,9 @@ def train(cfg, train_ds=None, val_ds=None) -> None:
     model = VoluFormerV9(cfg).to(device)
 
     # Optional: warm-start proposer from a previous-stage checkpoint.
+    # CLI override (warmstart_proposer_ckpt kwarg) wins over cfg.training.proposer_ckpt.
     # Stage 2 / 3 must load Stage 1 proposer weights before freezing.
-    prop_ckpt = getattr(cfg.training, "proposer_ckpt", None)
+    prop_ckpt = warmstart_proposer_ckpt or getattr(cfg.training, "proposer_ckpt", None)
     if prop_ckpt:
         ck_path = Path(prop_ckpt)
         if not ck_path.is_absolute():
@@ -468,11 +479,26 @@ def train(cfg, train_ds=None, val_ds=None) -> None:
                     else:
                         frac = 0.0
                     ds_w = ds_start + (ds_end - ds_start) * frac
-                    losses = stage1_loss(
-                        out, batch,
-                        small_organ=small_organ_crit,
-                        deep_sup_weight=ds_w,
-                    )
+                    if loss_fn is not None:
+                        seg_logits = out["proposer"]["full_logits"]
+                        seg_target = masks_to_class_label(batch["mask_volume"])
+                        presence_logits = getattr(model.proposer, "last_presence_logits", None)
+                        gate_weights = (
+                            model.proposer.collect_last_gates()
+                            if hasattr(model.proposer, "collect_last_gates") else None
+                        )
+                        losses = loss_fn(
+                            seg_logits=seg_logits,
+                            seg_target=seg_target,
+                            presence_logits=presence_logits,
+                            gate_weights=gate_weights,
+                        )
+                    else:
+                        losses = stage1_loss(
+                            out, batch,
+                            small_organ=small_organ_crit,
+                            deep_sup_weight=ds_w,
+                        )
                     total = losses["total"]
                     for k, v in losses.items():
                         if k == "total":

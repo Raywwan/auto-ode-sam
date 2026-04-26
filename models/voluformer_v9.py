@@ -49,9 +49,13 @@ class AnatomicalCascadeFusion(nn.Module):
             nn.Conv2d(hidden, hidden, 3, padding=1), nn.GELU(),
             nn.Conv2d(hidden, 1, 1),
         )
-        # Bias init toward refiner (sigmoid(-1.0) ≈ 0.27 weight on proposer).
+        # Bias init toward PROPOSER (sigmoid(+2.0) ≈ 0.88 weight on proposer).
+        # Rationale: at Stage 2 start, proposer is already trained (~0.84 Dice)
+        # while refiner is near-random. Per-pixel blend must not dilute strong
+        # proposer predictions below threshold; gate can learn to shift toward
+        # refiner later as it catches up.
         with torch.no_grad():
-            self.gate[-1].bias.fill_(-1.0)
+            self.gate[-1].bias.fill_(2.0)
 
     def forward(
         self,
@@ -114,6 +118,17 @@ class VoluFormerV9(nn.Module):
             feature_size=prop_cfg.get("feature_size", 48),
             use_v2=prop_cfg.get("use_v2", True),
             pretrained_weights=prop_cfg.get("pretrained_weights", None),
+            deep_supervision=bool(prop_cfg.get("deep_supervision", False)),
+            deep_sup_layers=tuple(prop_cfg.get(
+                "deep_sup_layers", ("decoder3", "decoder4", "decoder5"),
+            )),
+            lora_rank=int(prop_cfg.get("lora_rank", 0)),
+            lora_alpha=prop_cfg.get("lora_alpha", None),
+            use_organmoe=bool(prop_cfg.get("use_organmoe", False)),
+            moe_n_experts=int(prop_cfg.get("moe_n_experts", 8)),
+            moe_rank=int(prop_cfg.get("moe_rank", 16)),
+            moe_alpha=float(prop_cfg.get("moe_alpha", 16.0)),
+            moe_top_k=int(prop_cfg.get("moe_top_k", 2)),
         )
 
         # Stage 2 — OrganFlowSAM2 refiner.
@@ -121,6 +136,12 @@ class VoluFormerV9(nn.Module):
 
         # Fusion head (Novel #1).
         self.fusion = AnatomicalCascadeFusion(n_organs=n_organs)
+
+        # Modality token (0=CT, 1=MRI). Zero-init so legacy CT-only runs are
+        # numerically identical to pre-modality version at init.
+        embed_dim = int(cfg.model.get("embed_dim", 256))
+        self.modality_emb = nn.Embedding(2, embed_dim)
+        nn.init.zeros_(self.modality_emb.weight)
 
         # Stage freeze switches (controlled by training script).
         self.freeze_proposer = False
