@@ -125,14 +125,30 @@ class TotalSegmentatorDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         vol_idx = idx // self.slabs_per_volume
-        slab_idx = idx % self.slabs_per_volume
         rng = np.random.default_rng(self._seed + idx * 13)
         img, lab = self._load_volume(self.volume_ids[vol_idx])
         img = self._normalize(img)
         img_p, lab_p = self._crop_patch(img, lab, rng)
+
+        K = self.N_ORGANS
+        p = self.volume_patch
+        vol_t = torch.from_numpy(img_p).unsqueeze(0).float()           # (1, p, p, p)
+        mask_vol = np.zeros((K, p, p, p), dtype=np.float32)
+        for k in range(1, K + 1):
+            mask_vol[k - 1] = (lab_p == k).astype(np.float32)
+        mask_vol_t = torch.from_numpy(mask_vol)
+
+        # Stage-2 stand-ins; the model short-circuits at `if stage == 1: return out`
+        # in voluformer_v9.forward, so these are only read for batch dict
+        # construction in train_v9 and never reach GPU computation.
+        slab_dummy = torch.zeros((1, 1, 1, 1), dtype=torch.float32)
+        mask_slab_dummy = torch.zeros((1, 1, 1, 1), dtype=torch.float32)
+
         return {
-            "volume_patch": torch.from_numpy(img_p).unsqueeze(0).float(),  # (1, D, H, W)
-            "volume_label": torch.from_numpy(lab_p).long(),                 # (D, H, W)
-            "volume_id": self.volume_ids[vol_idx],
-            "slab_idx": slab_idx,
+            "volume":        vol_t,
+            "mask_volume":   mask_vol_t,
+            "slab":          slab_dummy,
+            "mask_slab":     mask_slab_dummy,
+            "organ_id":      torch.tensor(0, dtype=torch.long),
+            "slab_center_z": torch.tensor(p // 2, dtype=torch.long),
         }
