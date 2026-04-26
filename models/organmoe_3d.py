@@ -98,8 +98,22 @@ class MoELoRALinear(nn.Module):
             n_organs=n_organs, top_k=top_k, hidden=router_hidden,
         )
 
-    def forward(self, x: torch.Tensor, organ_presence: Optional[torch.Tensor] = None,
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Linear-compatible call: returns only the output tensor.
+        Uses self._cached_presence if set, else uniform routing."""
+        out, gate = self._compute(x, organ_presence=getattr(self, "_cached_presence", None))
+        self._last_gate = gate
+        return out
+
+    def forward_with_gate(self, x: torch.Tensor, organ_presence: Optional[torch.Tensor] = None,
+                          ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Test/diagnostic call: returns (out, gate)."""
+        out, gate = self._compute(x, organ_presence=organ_presence)
+        self._last_gate = gate
+        return out, gate
+
+    def _compute(self, x: torch.Tensor, organ_presence: Optional[torch.Tensor],
+                 ) -> Tuple[torch.Tensor, torch.Tensor]:
         """x: (..., in_features). organ_presence: (B, n_organs) or None.
         If organ_presence is None, defaults to zeros (uniform routing).
         Returns: (output (..., out_features), gate_weights (B, K, T)).
@@ -186,7 +200,7 @@ if __name__ == "__main__":
     moe = MoELoRALinear(base=base, n_experts=8, rank=16, alpha=16.0, n_organs=15, top_k=2)
     x = torch.randn(2, 64, 128)
     p = torch.rand(2, 15)
-    y, g = moe(x, p)
+    y, g = moe.forward_with_gate(x, p)
     print(f"in={x.shape} out={y.shape} gate={g.shape} sum_gate~top_k? "
           f"{g.sum(dim=1).mean().item():.3f} (expected ~1.0)")
     head = PresenceHead(in_channels=384, n_organs=15)
