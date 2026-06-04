@@ -340,4 +340,4 @@ graph TD
 | **Thesis value** | High | High | Very High | Very High | High |
 
 ---
-*Designed by Claude Opus 4.6 with extended thinking — 2026-04-09*
+* — 2026-04-09*
