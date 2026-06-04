@@ -16,7 +16,7 @@
 # =============================================================================
 
 experiment:
-  name: "v4_organflow_sam2_256px"
+  name: "v5_organflow_sam2_pilot3"
   seed: 42
   output_dir: "checkpoints"
   log_dir: "logs"
@@ -28,7 +28,7 @@ model:
   skip_channels: 128
   encoder:
     pretrained: true
-    lora_rank: 16
+    lora_rank: 32                         # V5: 16→32 for more adaptation capacity
   pfesa: {}
   ode:
     n_organs: 15
@@ -38,8 +38,8 @@ model:
     substeps: 4
   decoder:
     n_organs: 15
-    transformer_depth: 4
-    transformer_mlp_dim: 2048
+    transformer_depth: 6                  # V5: 4→6
+    transformer_mlp_dim: 3072             # V5: 2048→3072
   graph:
     n_organs: 15
 
@@ -51,9 +51,10 @@ data:
   slices_per_volume: 8
   target_organs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   num_classes: 1
+  augment: false              # pilot3: aug-off ablation to isolate architecture health
 
 training:
-  epochs: 120
+  epochs: 25                          # Pilot3: extended run for slower-warming V5 arch
   batch_size: 4
   grad_accumulation_steps: 2         # Effective batch = 8
   num_workers: 4
@@ -76,6 +77,7 @@ training:
   lambda_flow: 0.5
   lambda_deepsup: 0.1
   lambda_anatomy: 0.01
+  lambda_xsc: 0.25                    # V5 novel: Cross-Slice ODE Consistency
 
   # Legacy V3 features — OFF for V4 (multi-organ V4 branch handles its own loss)
   all_slice_supervision: false
@@ -104,7 +106,7 @@ checkpoint:
   resume_from: null
 
 validation:
-  val_every_n_epochs: 5
+  val_every_n_epochs: 2               # Pilot3: tighter val cadence to see trajectory
   vis_every_n_epochs: 10
 
 evaluation:

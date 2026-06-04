@@ -1,0 +1,43 @@
+{
+  "experiment": "v7_rescue_320",
+  "checkpoint": "checkpoints\\v7_rescue_320\\v7_rescue_320_best.pt",
+  "n_volumes": 100,
+  "tta": false,
+  "cc": true,
+  "threshold": 0.5,
+  "per_organ_dice": {
+    "spleen": 0.5078857904517937,
+    "r_kidney": 0.5271086628992216,
+    "l_kidney": 0.5960622866311843,
+    "gallbladder": 0.34238246284553797,
+    "esophagus": 0.006221790527342533,
+    "liver": 0.849019343916296,
+    "stomach": 0.46966198961845024,
+    "aorta": 0.6887915585234943,
+    "ivc": 0.536640890952146,
+    "pancreas": 0.18210011329828205,
+    "r_adrenal": 0.34319063532995464,
+    "l_adrenal": 0.33445101971885394,
+    "duodenum": 0.22715400126360802,
+    "bladder": 0.0791254903451888,
+    "prostate_uterus": 0.12249139499522371
+  },
+  "per_organ_vol_counts": {
+    "spleen": 100,
+    "r_kidney": 98,
+    "l_kidney": 100,
+    "gallbladder": 93,
+    "esophagus": 100,
+    "liver": 100,
+    "stomach": 99,
+    "aorta": 100,
+    "ivc": 100,
+    "pancreas": 100,
+    "r_adrenal": 100,
+    "l_adrenal": 100,
+    "duodenum": 99,
+    "bladder": 99,
+    "prostate_uterus": 97
+  },
+  "mean_dice": 0.3874858287544385
+}

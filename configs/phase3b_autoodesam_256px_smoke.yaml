@@ -1,0 +1,165 @@
+# =============================================================================
+# phase3b_autoodesam_256px_smoke.yaml — Phase 3b: AutoODESAM 2-Epoch Smoke Test
+#
+# PURPOSE:
+#   Verify Auto-ODE-SAM V3 trains without errors before committing to Phase 3a
+#   full run (~3-4 days). Run this first.
+#
+# SMOKE TEST DESIGN:
+#   - 2 epochs only
+#   - 3 organs: liver (6) + left adrenal (11) + right adrenal (12)
+#     → liver = easy baseline, adrenals = hardest organs (stress test)
+#   - No warmup (epoch 0 starts at full LR to expose any gradient issues)
+#   - Validates every epoch, saves every epoch
+#
+# PASS CRITERIA:
+#   - Both epochs complete without NaN/OOM/crash
+#   - val/dice_3d > 0.0 (model is learning something)
+#   - GPU VRAM stays ≤ 10GB
+#
+# RUN:
+#   cd C:\Users\Raywa\Desktop\VoluFormer3D
+#   C:\Users\Raywa\Desktop\LiteSAM3D\.venv\Scripts\python train.py \
+#       --config configs/phase3b_autoodesam_256px_smoke.yaml
+#
+# MONITOR:
+#   tensorboard --logdir logs/phase3b_autoodesam_smoke_2ep
+# =============================================================================
+
+experiment:
+  name: "phase3b_autoodesam_smoke_2ep"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2          # Stage 2 tap: 16×16 at 256px, 384→256ch
+
+  ode:
+    ode_hidden: 64
+    n_freqs: 4
+    substeps: 2
+    n_organs: 15
+    organ_emb_dim: 32
+
+  # PFESA spectral enhancement (zero params)
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  # AutoODESAM has no prompt_encoder — organ queries are learned end-to-end
+  # (no prompt_encoder section)
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  # organ_decoder maps to OrganQueryDecoder constructor args
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [6, 11, 12]   # liver (easy) + both adrenals (hardest) — stress test
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 2                     # Smoke test only
+  batch_size: 4
+  grad_accumulation_steps: 4    # Effective batch size = 16
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 0              # No warmup — start at full LR to expose gradient issues
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  # All Phase 2 training fixes
+  all_slice_supervision: true
+  cutmix_prob: 0.5
+
+  # Copy-paste augmentation: lower prob for smoke test to reduce noise
+  copypaste_prob: 0.1
+
+  # Foreground oversampling: ensures hard organs appear in each batch
+  foreground_oversampling: true
+
+  # Boundary loss ramps in at epoch 50 (inactive during 2-epoch smoke test)
+  boundary_ramp_epoch: 50
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0    # OFF: clDice is designed for tubular structures (vessels, airways)
+                           #       and consistently hurts solid organ segmentation
+    w_iou:          0.1
+    w_boundary:     0.1    # Doubled from 0.05: boundary precision is a thesis metric (HD95)
+    w_dice_topk:    0.5
+    w_deepsup:      0.1    # Deep supervision at ODE midpoint (auxiliary head)
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+  # (focal_alpha, focal_gamma, cldice_iterations now live inside loss: block)
+
+checkpoint:
+  save_every_n_epochs: 1        # Save after every epoch for smoke test
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 1         # Validate after every epoch for smoke test
+  vis_every_n_epochs: 1
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

@@ -1,18 +1,13 @@
-"""MedSAM2 Hiera-Tiny encoder with LoRA rank-16 adaptation.
+"""MedSAM2 Hiera-Tiny encoder with LoRA adaptation.
 
-Loads MedSAM2 pretrained weights (if present), freezes backbone, injects LoRA
-deltas on attention qkv + projection layers of every block. Taps stride-8
-(stage 1, 192 ch) and stride-16 (stage 2, 384 ch) feature maps for decoder
-consumption.
-
-Implementation uses timm's `hiera_tiny` (matches SAM2/MedSAM2 backbone) via
-`features_only=True` to keep multi-scale outputs.
+V6: 3-scale skip taps — stride-4 (stage 0, 96ch), stride-8 (stage 1, 192ch),
+stride-16 (stage 2, 384ch). Feeds an FPN-style multi-scale decoder.
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Tuple
+from typing import Dict
 
 import torch
 import torch.nn as nn
@@ -50,6 +45,8 @@ class LoRALinear(nn.Module):
 
 def _inject_lora(module: nn.Module, rank: int, alpha: float = None) -> int:
     """Replace every nn.Linear whose name is in {'qkv','proj','fc1','fc2'} with LoRALinear. Returns count."""
+    if rank is None or int(rank) <= 0:
+        return 0
     if alpha is None:
         alpha = float(rank)
     n_replaced = 0
@@ -63,11 +60,16 @@ def _inject_lora(module: nn.Module, rank: int, alpha: float = None) -> int:
 
 
 class MedSAM2Encoder(nn.Module):
-    """Hiera-Tiny backbone with LoRA + stage-1/stage-2 taps.
+    """Hiera-Tiny backbone with LoRA + stage-0/1/2 taps.
+
+    V6 adds a stride-4 tap (stage 0) to support FPN-style multi-scale decoder
+    fusion. Still excludes stage-3 (stride-32, only 10×10 at 320²) which would
+    collapse small-organ detail without benefit.
 
     Args:
         embed_dim: target channels for main tap (projects 384 → embed_dim).
-        skip_channels: target channels for skip tap (projects 192 → skip_channels).
+        skip_channels: target channels for stride-8 skip (projects 192 → skip_channels).
+        skip_fine_channels: target channels for stride-4 skip (projects 96 → this).
         lora_rank: LoRA rank (default 16).
         pretrained: if True, try to load `checkpoints/medsam2/MedSAM2_hiera_tiny.pt`.
     """
@@ -76,26 +78,27 @@ class MedSAM2Encoder(nn.Module):
         self,
         embed_dim: int = 256,
         skip_channels: int = 128,
+        skip_fine_channels: int = 64,
         lora_rank: int = 16,
         lora_alpha: float = None,
         pretrained: bool = True,
+        img_size: int = 320,
     ) -> None:
         super().__init__()
         if lora_alpha is None:
-            lora_alpha = float(lora_rank)  # standard LoRA practice: scale=1.0 when alpha=rank
+            lora_alpha = float(lora_rank)
+        self.img_size = img_size
         self.backbone = timm.create_model(
             "hiera_tiny_224",
             pretrained=False,
             features_only=True,
-            out_indices=[1, 2],  # tap stride-8 (192ch) and stride-16 (384ch); stage-3 excluded to avoid dead LoRA params
-            img_size=256,
+            out_indices=[0, 1, 2],  # stride-4, stride-8, stride-16
+            img_size=img_size,
         )
         fi = self.backbone.feature_info
-        # feature_info lists all 4 stages (0–3); out_indices=[1,2] returns feats[0..1]
-        # feats[0] ← fi[1]: stage-1, 192ch, stride-8  (skip tap)
-        # feats[1] ← fi[2]: stage-2, 384ch, stride-16 (main tap)
-        skip_in_ch = fi[1]["num_chs"]   # 192ch
-        main_in_ch = fi[2]["num_chs"]   # 384ch
+        fine_in_ch = fi[0]["num_chs"]   # 96ch  (stride-4)
+        skip_in_ch = fi[1]["num_chs"]   # 192ch (stride-8)
+        main_in_ch = fi[2]["num_chs"]   # 384ch (stride-16)
 
         if pretrained:
             ckpt_path = Path(__file__).resolve().parents[1] / "checkpoints" / "medsam2" / "MedSAM2_hiera_tiny.pt"
@@ -137,27 +140,34 @@ class MedSAM2Encoder(nn.Module):
         for p in self.backbone.parameters():
             p.requires_grad = False
         n_lora = _inject_lora(self.backbone, rank=lora_rank, alpha=lora_alpha)
-        print(f"[MedSAM2Encoder] injected LoRA into {n_lora} Linear layers "
-              f"(rank={lora_rank}, alpha={lora_alpha}, scale={lora_alpha/lora_rank:.3f})")
+        if lora_rank and int(lora_rank) > 0:
+            print(f"[MedSAM2Encoder] injected LoRA into {n_lora} Linear layers "
+                  f"(rank={lora_rank}, alpha={lora_alpha}, scale={lora_alpha/lora_rank:.3f})")
+        else:
+            print(f"[MedSAM2Encoder] LoRA disabled (rank={lora_rank}); encoder fully frozen.")
 
         # Projection heads (trainable)
-        self.proj_main = nn.Conv2d(main_in_ch, embed_dim, kernel_size=1)
+        self.proj_fine = nn.Conv2d(fine_in_ch, skip_fine_channels, kernel_size=1)
         self.proj_skip = nn.Conv2d(skip_in_ch, skip_channels, kernel_size=1)
+        self.proj_main = nn.Conv2d(main_in_ch, embed_dim, kernel_size=1)
+        self.skip_fine_channels = skip_fine_channels
         self.skip_channels = skip_channels
         self.embed_dim = embed_dim
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """x: (B, 3, H, W) → (main (B, embed, H/16, W/16), skip (B, skip_ch, H/8, W/8))."""
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """x: (B, 3, H, W) → {main (B, embed, H/16, W/16),
+        skip (B, skip_ch, H/8, W/8), skip_fine (B, fine_ch, H/4, W/4)}."""
         feats = self.backbone(x)
-        skip_raw, main_raw = feats[0], feats[1]  # (B, 192, H/8, W/8), (B, 384, H/16, W/16)
-        # timm 1.0.22 returns NCHW from features_only; assert it so any future
-        # layout change fails loudly instead of silently mis-shaping downstream.
-        assert skip_raw.shape[1] == 192, f"Expected C=192 at dim 1 (NCHW), got {skip_raw.shape}"
-        assert main_raw.shape[1] == 384, f"Expected C=384 at dim 1 (NCHW), got {main_raw.shape}"
-        main = self.proj_main(main_raw)
-        skip = self.proj_skip(skip_raw)
-        return main, skip
+        fine_raw, skip_raw, main_raw = feats[0], feats[1], feats[2]
+        assert fine_raw.shape[1] == 96, f"Expected C=96 at dim 1, got {fine_raw.shape}"
+        assert skip_raw.shape[1] == 192, f"Expected C=192 at dim 1, got {skip_raw.shape}"
+        assert main_raw.shape[1] == 384, f"Expected C=384 at dim 1, got {main_raw.shape}"
+        return {
+            "main": self.proj_main(main_raw),
+            "skip": self.proj_skip(skip_raw),
+            "skip_fine": self.proj_fine(fine_raw),
+        }
 
-    def get_output_size(self) -> Tuple[int, int]:
-        """Main-tap spatial size for input 256×256 = 16×16."""
-        return 16, 16
+    def get_output_size(self):
+        s = self.img_size // 16
+        return s, s

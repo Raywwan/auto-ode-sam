@@ -1,0 +1,362 @@
+[
+  {
+    "patient_id": "amos_0008",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.008265757825047989,
+    "hd95_mm": 52.84876248238456,
+    "nsd": 0.0005108556832694764,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0008",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 290.7955028498074,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0008",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 282.7615967948792,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0008",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7852502361942565,
+    "hd95_mm": 27.159313283715687,
+    "nsd": 0.38165255347798976,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0013",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.31065125638879487,
+    "hd95_mm": 39.37654799225257,
+    "nsd": 0.07119994551893218,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0013",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 222.8857358945434,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0013",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 232.7027604984354,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0013",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7892511335500796,
+    "hd95_mm": 81.19392466911167,
+    "nsd": 0.2908202291520729,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0018",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.44994735733838703,
+    "hd95_mm": 434.1668475318645,
+    "nsd": 0.04738908519827248,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0018",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.058863420588634204,
+    "hd95_mm": 273.1007704283359,
+    "nsd": 0.035797458247388385,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0018",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.001806985425235978,
+    "hd95_mm": 316.53816725664564,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0018",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7841893875511415,
+    "hd95_mm": 83.6781789669558,
+    "nsd": 0.283567687668624,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0022",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.01087512971290211,
+    "hd95_mm": 434.02844295865947,
+    "nsd": 0.0016597510373443983,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0022",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.0006721062465554555,
+    "hd95_mm": 297.26406873081197,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0022",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 367.81479551266034,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0022",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7761931143156624,
+    "hd95_mm": 330.04175871868466,
+    "nsd": 0.29517636334537156,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0029",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.3970895112575508,
+    "hd95_mm": 20.908543266549284,
+    "nsd": 0.06221039592604487,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0029",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.03287588599004675,
+    "hd95_mm": 191.8503280404419,
+    "nsd": 0.009228497600590625,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0029",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.013753533308020082,
+    "hd95_mm": 136.0086438850525,
+    "nsd": 0.0024079102413033454,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0029",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.8392309782230086,
+    "hd95_mm": 68.65856152073178,
+    "nsd": 0.3365316808537811,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0032",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.5227715890881711,
+    "hd95_mm": 353.0096634637565,
+    "nsd": 0.1249253315280156,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0032",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.08162589315288885,
+    "hd95_mm": 266.8923219574402,
+    "nsd": 0.041025641025641026,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0032",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.00627032591656723,
+    "hd95_mm": 174.91892988278858,
+    "nsd": 0.006136044880785414,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0032",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7956609846806144,
+    "hd95_mm": 50.00859255142423,
+    "nsd": 0.32191205358199415,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0034",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.010691601976005646,
+    "hd95_mm": 175.59147982798,
+    "nsd": 0.006196606906509445,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0034",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.014141493498841183,
+    "hd95_mm": 206.94958177705328,
+    "nsd": 0.011860531580451557,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0034",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 189.3873149650665,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0034",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7607969537211678,
+    "hd95_mm": 72.96979229476214,
+    "nsd": 0.23737888993796377,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0040",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.2549997543118274,
+    "hd95_mm": 47.97196153387565,
+    "nsd": 0.007281195648969726,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0040",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.006787564766839378,
+    "hd95_mm": 231.57617240193423,
+    "nsd": 0.006283874008326133,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0040",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 238.95160008434172,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0040",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7420603942531885,
+    "hd95_mm": 166.4894645129102,
+    "nsd": 0.24165336949484342,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0041",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.3892636994612435,
+    "hd95_mm": 23.114166941852186,
+    "nsd": 0.03746762243238359,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0041",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.016957433966602476,
+    "hd95_mm": 190.01360695524284,
+    "nsd": 0.010433162552398696,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0041",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0005765000379276341,
+    "hd95_mm": 183.64747587801068,
+    "nsd": 0.0008708092305778441,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0041",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.8058867808097117,
+    "hd95_mm": 34.68329601942705,
+    "nsd": 0.3004022177945928,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0051",
+    "organ_id": 1,
+    "organ_name": "spleen",
+    "dsc": 0.3657799455399623,
+    "hd95_mm": 32.59375522264916,
+    "nsd": 0.05336353451215354,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0051",
+    "organ_id": 2,
+    "organ_name": "r_kidney",
+    "dsc": 0.0002482005460412013,
+    "hd95_mm": 225.16362558421133,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0051",
+    "organ_id": 3,
+    "organ_name": "l_kidney",
+    "dsc": 0.0,
+    "hd95_mm": 262.081775231716,
+    "nsd": 0.0,
+    "tolerance_mm": 1.0
+  },
+  {
+    "patient_id": "amos_0051",
+    "organ_id": 6,
+    "organ_name": "liver",
+    "dsc": 0.7595879164136131,
+    "hd95_mm": 55.97887562766946,
+    "nsd": 0.26647176690864893,
+    "tolerance_mm": 1.0
+  }
+]

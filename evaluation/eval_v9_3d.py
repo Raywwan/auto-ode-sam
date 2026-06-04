@@ -151,12 +151,15 @@ def eval_volume(
             accum += p
         preds = accum / (1.0 + len(flip_axes))
 
-    probs_orig = _resample_iso(preds, (target_spacing,) * 3, target=sp_zyx[0], mode="trilinear")
-    if probs_orig.shape[-3:] != ct.shape:
-        src = torch.from_numpy(probs_orig).float()[None]
-        probs_orig = F.interpolate(
-            src, size=ct.shape, mode="trilinear", align_corners=False,
-        ).squeeze(0).numpy()
+    # Back-resample iso-space predictions directly to original CT shape in
+    # a single trilinear interpolation. The previous two-step approach
+    # (_resample_iso with scalar target then F.interpolate) shrank H/W by
+    # target/z_sp when z_sp >> xy_sp, destroying spatial detail before
+    # blowing it back up.
+    src = torch.from_numpy(preds).float()[None]
+    probs_orig = F.interpolate(
+        src, size=ct.shape, mode="trilinear", align_corners=False,
+    ).squeeze(0).numpy()
 
     bin_preds = (probs_orig > 0.5).astype(np.uint8)
     if cc:
@@ -175,14 +178,8 @@ def eval_volume(
 
 
 def _build_cfg_from_yaml(path: str):
-    import yaml
-    from types import SimpleNamespace
-
-    def _ns(d):
-        if isinstance(d, dict):
-            return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
-        return d
-    return _ns(yaml.safe_load(open(path)))
+    from omegaconf import OmegaConf
+    return OmegaConf.load(path)
 
 
 def main():

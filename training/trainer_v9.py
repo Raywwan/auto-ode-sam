@@ -115,7 +115,9 @@ class V9Trainer:
                 )["loss"]
 
         if "boundary_ddpm" in self.losses and "slab" in batch:
-            center = int(batch["slab_center_z"][0].item())
+            # slab midplane = slab-local depth//2; slab_center_z is in
+            # volume-patch coords and is NOT a valid slab index.
+            center = batch["slab"].shape[1] // 2
             img2d = batch["slab"][:, center]
             coarse = torch.sigmoid(refiner["masks"])
             gt = batch["mask_slab"][:, :, center]
@@ -138,7 +140,8 @@ class V9Trainer:
             cfeat = refiner.get("center_feat", None)
             if cfeat is not None:
                 xm_mod = self.losses["cross_modal_infonce"]
-                center = int(batch["slab_center_z"][0].item())
+                # slab midplane = slab-local depth//2.
+                center = batch["mask_slab"].shape[2] // 2
                 mask_center = batch["mask_slab"][:, :, center]     # (B, K, H, W)
                 B = cfeat.shape[0]
                 k_idx = organ_id.clamp(0, mask_center.shape[1] - 1)

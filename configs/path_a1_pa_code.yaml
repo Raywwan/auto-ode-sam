@@ -1,0 +1,195 @@
+# =============================================================================
+# path_a1_pa_code.yaml -- PA-CODE 2026-05-01
+#
+# Position-Aware Conditioned Neural ODE for Multi-Organ Medical Segmentation.
+# Replaces failed A1 multi-organ extension (mean DSC 0.24, kidneys=0.000).
+#
+# Design doc: docs/superpowers/specs/2026-04-30-pa-code-design.md
+#
+# Three components (all gated by `model.ode.use_pa_code: true`):
+#   1. Identity-init FiLM dynamics:    dh/dt = gamma(e) * f_theta(h,t,p) + beta(e)
+#                                      gamma=1, beta=0 at init -> model behaves
+#                                      EXACTLY as V2 ODE at step 0 (verified by
+#                                      scripts/sanity_pa_code_identity.py)
+#   2. Position-augmented state:        f_theta(h,t,p) where p=(x,y) Fourier-encoded
+#   3. Three-phase curriculum:
+#        P0 (epochs 0..4, len=5):  encoder FROZEN, only PA-CODE + decoder train
+#        P1 (epochs 5..14, len=10): encoder unfrozen at 0.05x LR
+#        P2 (epochs 15..end):       full LR cosine decay
+#
+# Resume source: checkpoints/path_a1_big_solid/path_a1_big_solid_epoch001.pt
+#   (the empirical best from the failed A1 run -- mean 0.24, liver 0.787 -- the
+#    only ckpt with V2 liver knowledge mostly intact. Identity-init means at
+#    step 0 PA-CODE behaves as the underlying ODE, so the ep_001 features are
+#    preserved for liver inputs.)
+#
+# Save dir: checkpoints/path_a1_pa_code/
+# Sacred ckpts (do NOT touch): see project_path_a1_big_solid_organs.md
+#
+# Targets (per design doc Sec 8):
+#   floor:   mean DSC >= 0.85, liver >= 0.93, each big solid >= 0.80
+#   stretch: mean DSC >= 0.92, liver >= 0.95, each big solid >= 0.92
+#
+# Monitor metric: val_dice_3d (2-vol mini eval at end of each epoch, ~3 min cost)
+#   instead of the noisy 2D-slice val_dice that overwrote best.pt in the failed
+#   A1 run.
+#
+# Anti-pivot rule: gate-fail at end of P1 -> debug, don't pivot. Fallback A0.
+# =============================================================================
+
+experiment:
+  name: "path_a1_pa_code"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true        # V2 warmstart will overwrite encoder.*
+  encoder_freeze_backbone: false  # curriculum freezes via training.encoder_freeze_epochs
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2
+
+  ode:
+    # ----- PA-CODE flags (NEW) -----
+    use_pa_code: true             # turn on FiLM + position-augmented dynamics
+    n_pos_freqs: 4                # 2 axes x (sin+cos) x 4 = 16-dim positional encoding
+    # ----- Existing ODE knobs -----
+    ode_hidden: 128
+    n_freqs: 6                    # time encoding bands
+    substeps: 4
+    n_organs: 15
+    organ_emb_dim: 64             # PA-CODE FiLM heads sized for 64-dim organ embedding
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 2, 3, 6]     # spleen, R-kidney, L-kidney, liver
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  # PA-CODE three-phase budget. P0=5 + P1=10 + P2=25 = 40 ep.
+  # User has unlimited epoch budget (2026-04-30 directive); P2 can extend if
+  # the 3D mini-eval is still climbing at epoch 40.
+  epochs: 40
+
+  # ----- Curriculum (NEW for PA-CODE) -----
+  encoder_freeze_epochs: 5        # P0 length: encoder backbone frozen
+                                  # for first 5 epochs.
+
+  batch_size: 2
+  grad_accumulation_steps: 8      # effective batch = 16
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true           # fp16 (V2 trained successfully on fp16)
+
+  optimizer: "adamw"
+  lr: 2.0e-4                      # peak LR for P2 (5x A1's 2e-5; PA-CODE has
+                                  # fresh FiLM + position heads to train, and
+                                  # P0 frozen-encoder shields V2 weights from it)
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 3                # warmup to peak by ep 3 (still inside P0)
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  # P1 LR multiplier on encoder when unfrozen (epochs 5+).
+  # Net encoder peak LR = 2.0e-4 * 0.05 = 1.0e-5 (vs 2e-5 in failed A1).
+  encoder_lr_scale: 0.05
+
+  all_slice_supervision: true
+  cutmix_prob: 0.0                # hardcoded OFF for auto_ode_sam anyway
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+
+  boundary_ramp_epoch: 12         # boundary loss only after P1 ends so the
+                                  # high-gradient boundary signal cannot destabilize
+                                  # the freshly-unfrozen encoder (audit Concern 8).
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0
+    w_iou:          0.1
+    w_boundary:     0.1
+    w_dice_topk:    0.5           # PMDiceLoss (memory: +1.85-2.66 DSC multi-organ)
+    w_deepsup:      0.1
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 1          # 40 ep -- keep all (user OK with disk)
+  keep_top_k: 10
+  monitor_metric: "val_dice_3d"   # NEW: 3D mini-eval is gate-honest; 2D was noisy
+  best_min_delta: 0.005           # hysteresis: only overwrite best.pt on a +0.5pt
+                                  # improvement to avoid lucky-volume noise (audit Bug 3)
+  # Warmstart prepared from path_a1_big_solid_epoch001.pt by
+  # scripts/prepare_a1_pa_code_warmstart.py. Carries encoder.*, decoder.*,
+  # deep_sup_head.*, dense_pe; ode.* keys are fresh PA-CODE identity-init
+  # (gamma=1, beta=0). The combination preserves V2 liver knowledge exactly
+  # at step 0.
+  resume_from: "checkpoints/path_a1_pa_code/path_a1_pa_code_warmstart.pt"
+
+validation:
+  val_every_n_epochs: 1
+  vis_every_n_epochs: 2
+  use_val_dice_3d: true           # NEW: enables _val_dice_3d() in trainer
+  val_dice_3d_n_vols: 4           # n_vols=2 had ~0.05-0.10 stddev (audit Bug 3);
+                                  # 4 halves the noise. Cost +3 min/epoch.
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

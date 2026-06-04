@@ -1,0 +1,142 @@
+# configs/v10_voco_l.yaml — Week 1 VoCo-L baseline (PRIMARY moonshot base).
+#
+# MOONSHOT PLAN CONTEXT (2026-04-24):
+#   VoCo (PreCT-160K, 160K CT volumes) is the SOTA-tier 3D CT pretraining.
+#   Paper-reported AMOS22 CT Dice: ~0.86 for the L variant (290M, fs=96),
+#   vs our from-scratch FT baseline 0.5091. This is the key ceiling lifter.
+#
+# VoCo-L SPEC:
+#   - SwinUNETR v2, feature_size=96, 290M params, out_channels=21.
+#   - Weight file: checkpoints/pretrained/voco/VoComni_L.pt (1.17 GB).
+#   - The 21-class output head is shape-dropped at load time (we use 16).
+#
+# VRAM PLAN (24 GB 4090):
+#   - 290M params * 4 bytes = 1.16 GB weights. Fine.
+#   - Activations at 96^3 patch, fs=96, batch 2: tight. Start with batch 1
+#     + gradient accumulation 2 (effective batch 2). If OOM, enable
+#     use_checkpoint=True (already on in SwinUNETRProposer).
+#   - If still OOM, fall back to configs/v10_voco_b.yaml.
+#
+# PHASE C DISCIPLINE:
+#   Week 1 = baseline only. Do NOT flip copy_paste / small-organ-loss /
+#   deep-sup yet. Week 2 runs each knob in its own new config:
+#     v10_voco_l_cp.yaml, v10_voco_l_sl.yaml, v10_voco_l_ds.yaml,
+#     v10_voco_l_full.yaml.
+
+experiment:
+  name: "v10_voco_l_ft"
+  seed: 42
+  output_dir: "checkpoints/v10_voco_l_ft"
+  log_dir: "logs/v10_voco_l_ft"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+
+  proposer:
+    patch_size: 96
+    feature_size: 96                                # VoCo-L fs (2x VoCo-B)
+    use_v2: true
+    pretrained_weights: "checkpoints/pretrained/voco/VoComni_L.pt"
+    deep_supervision: false
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
+
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph: { n_organs: 15 }
+
+  dynamic_pfesa:
+    enabled: false
+    kernel_size: 3
+    organ_dim: 32
+    text_dim: 0
+  boundary_ddpm:
+    enabled: false
+    hidden: 64
+    n_timesteps: 100
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+  copy_paste_prob: 0.0
+  copy_paste_cache: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22/copy_paste_bank.pt"
+
+training:
+  stage: 1
+  # v10_voco_l_ft Run 1 (2026-04-24, lr=1e-4, 50 ep) tripped STOP-RULE at ep 8:
+  # val peaked 0.8085 at ep 5 then regressed (train loss 0.67->0.44 = classic
+  # overfit). Run 2 uses a lower LR + shorter schedule + save-every-epoch.
+  epochs: 15
+  batch_size: 1
+  num_workers: 2
+  optimizer:
+    name: "adamw"
+    lr: 3.0e-5                                      # 3x lower than Run 1
+    weight_decay: 0.05                              # 5x stronger regularization
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 1
+  amp: true
+  # fp16 autocast produced NaN on VoCo-L (fs=96 activations overflow fp16).
+  # bf16 has same exponent range as fp32 → no overflow. 4090 supports bf16.
+  amp_dtype: "bf16"
+  grad_clip: 1.0
+  loss_small_organ: false
+  loss_small_organ_cfg:
+    dice_weight: 1.0
+    tversky_weight: 1.0
+    focal_weight: 0.5
+    tversky_alpha: 0.3
+    tversky_beta: 0.7
+    focal_gamma: 1.5
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.25
+  flow_weight: 0.5
+  deepsup_weight: 0.25
+  teacher_distill: 0.0
+  cross_modal_infonce: 0.0
+  flow_shape_prior: 0.0
+  cascade_consistency_kl: 0.0
+  cascade_consistency_dice: 0.0
+  boundary_ddpm: 0.0
+
+eval:
+  # Save every epoch — Run 1 saved every 2, so the peak at ep 5 was missed.
+  every_n_epochs: 1
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.02
+  max_peak_vram_gb: 23                              # leave 1GB headroom
+  warmstart_missing_key_frac: 0.05

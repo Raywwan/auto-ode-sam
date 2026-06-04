@@ -1,0 +1,159 @@
+# =============================================================================
+# base.yaml — VoluFormer3D Default Configuration
+#
+# Successor to LiteSAM-3D V2. Key differences:
+#   - model.architecture: selects which model class to build
+#   - model.multiscale_isa.stage_index: which TinyViT stage to tap (default 2)
+#
+# Usage:
+#   python train.py --config configs/amos22.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Experiment metadata
+# ---------------------------------------------------------------------------
+experiment:
+  name: "voluformer3d_base"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+# ---------------------------------------------------------------------------
+# Model architecture
+# ---------------------------------------------------------------------------
+model:
+  # Architecture selector — controls which model class is built
+  architecture: "multiscale_isa"     # Options: multiscale_isa | litesam3d_v2
+
+  # Encoder backbone
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  # MultiScaleISA-specific settings
+  multiscale_isa:
+    stage_index: 2                   # 2=Stage2 (A1 test), 3=Stage3 (V2 baseline)
+
+  # DA-ISA (reused from V2 — same code, different input spatial size)
+  isa:
+    enabled: true
+    depth: 2
+    num_heads: 8
+    window_size: 3
+    dropout: 0.1
+    use_depth_pe: true
+    use_relative_bias: true
+    per_head_bias: false
+    max_depth: 512
+    max_window_size: 5
+
+  # Prompt encoder
+  prompt_encoder:
+    num_modalities: 11
+    modality_embed_dim: 64
+    content_embed_dim: 64
+    use_clip_text: false
+
+  # Mask decoder
+  mask_decoder:
+    num_multimask_outputs: 3
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  epochs: 100
+  batch_size: 16
+  grad_accumulation_steps: 1
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+
+  optimizer: "adamw"
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 5
+  warmup_lr_init: 1.0e-6
+
+  grad_clip: 1.0
+
+  loss:
+    w_dice:   0.5
+    w_focal:  0.5
+    w_cldice: 0.0
+    w_iou:    0.1
+    w_boundary: 0.0
+
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  cldice_iterations: 3
+
+# ---------------------------------------------------------------------------
+# Checkpointing
+# ---------------------------------------------------------------------------
+checkpoint:
+  save_every_n_epochs: 10
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+validation:
+  val_every_n_epochs: 5
+  vis_every_n_epochs: 10    # log overlay images every N epochs
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+# ---------------------------------------------------------------------------
+# Cross-validation
+# ---------------------------------------------------------------------------
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  cache_rate: 0.0
+
+  target_spacing: [1.5, 1.5, 1.5]
+  clip_range: [-175, 250]
+  normalize: true
+
+  slices_per_volume: 16
+  slice_overlap: 0.5

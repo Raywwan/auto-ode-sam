@@ -1,0 +1,148 @@
+# configs/v10_voco_b.yaml — Week 1 VoCo-B baseline (fallback path).
+#
+# MOONSHOT PLAN CONTEXT (2026-04-24):
+#   Current cascade baseline: 0.5353 mean 3D Dice (30-vol val, present-only).
+#   Goal: 0.83 committed / 0.87 stretch / 0.90 moonshot in 30 days on 4090.
+#   The ceiling-lifter is pretrained 3D CT weights. VoCo (PreCT-160K = 160K CT
+#   volumes) is the public SOTA-tier pretraining. VoCo-B is the drop-in
+#   fallback; VoCo-L (feature_size=96, 290M) is the primary moonshot base.
+#
+# VoCo-B SPEC:
+#   - SwinUNETR v2, feature_size=48, 72.8M params, out_channels=21 (PreCT-160K
+#     classes). Our SwinUNETRProposer instantiates with 16 classes (15 organs
+#     + bg); the final 1x1x1 conv is shape-dropped at load time.
+#   - Existing SwinUNETRProposer.load_pretrained handles the format out of
+#     the box (smoke-tested 2026-04-24: 134/134 encoder keys filled, only
+#     the 21-class `out.conv.conv` dropped, forward pass OK).
+#
+# ORDER IN PLAN:
+#   - Only used if VoCo-L fails VRAM on 4090. VoCo-L primary config is
+#     configs/v10_voco_l.yaml.
+#   - If VoCo-B is run standalone (no VoCo-L), expected AMOS22 val Dice 0.82.
+#     Still a +0.30 lift over our 0.5091 from-scratch FT baseline.
+#
+# INHERITANCE:
+#   Everything mirrors v9_tierB.yaml except the proposer pretrained_weights
+#   and the experiment/output dir. Phase C flags stay default-OFF; Week 2
+#   ablation runs will flip them one at a time via separate configs.
+
+experiment:
+  name: "v10_voco_b_ft"
+  seed: 42
+  output_dir: "checkpoints/v10_voco_b_ft"
+  log_dir: "logs/v10_voco_b_ft"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+
+  proposer:
+    patch_size: 96
+    feature_size: 48                                # VoCo-B fs
+    use_v2: true                                    # must match VoCo
+    # Swapped from MONAI SwinViT SSL (392MB) to VoCo-B supervised
+    # pretraining on 160K CT volumes. See memory/project_v9_month_moonshot_plan.md.
+    pretrained_weights: "checkpoints/pretrained/voco/VoComni_B.pt"
+    deep_supervision: false
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
+
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph: { n_organs: 15 }
+
+  dynamic_pfesa:
+    enabled: false
+    kernel_size: 3
+    organ_dim: 32
+    text_dim: 0
+  boundary_ddpm:
+    enabled: false
+    hidden: 64
+    n_timesteps: 100
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+  # Week 1 = baseline (Phase C OFF). Week 2 ablations flip these in separate
+  # configs: v10_voco_b_cp.yaml, v10_voco_b_sl.yaml, v10_voco_b_ds.yaml.
+  copy_paste_prob: 0.0
+  copy_paste_cache: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22/copy_paste_bank.pt"
+
+training:
+  stage: 1
+  # 50 epochs is nnU-Net-equivalent for 270-vol AMOS22. Iter-based training
+  # is possible by setting steps_per_epoch in trainer; current trainer uses
+  # epoch-based loop. Est. wall-time on 4090: ~60-80 h at batch 2.
+  epochs: 50
+  batch_size: 2
+  num_workers: 2
+  optimizer:
+    name: "adamw"
+    # Lower LR than scratch: pretrained weights need only FT, not warm-up.
+    lr: 1.0e-4
+    weight_decay: 0.01
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 2
+  amp: true
+  grad_clip: 1.0
+  loss_small_organ: false
+  loss_small_organ_cfg:
+    dice_weight: 1.0
+    tversky_weight: 1.0
+    focal_weight: 0.5
+    tversky_alpha: 0.3
+    tversky_beta: 0.7
+    focal_gamma: 1.5
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.25
+  flow_weight: 0.5
+  deepsup_weight: 0.25
+  teacher_distill: 0.0
+  cross_modal_infonce: 0.0
+  flow_shape_prior: 0.0
+  cascade_consistency_kl: 0.0
+  cascade_consistency_dice: 0.0
+  boundary_ddpm: 0.0
+
+eval:
+  every_n_epochs: 2
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.02
+  max_peak_vram_gb: 22
+  # Relaxed because VoCo weights cover ~95% of the model (only output head
+  # is new). Shape-dropped: 2 tensors (21-class head vs our 16).
+  warmstart_missing_key_frac: 0.05

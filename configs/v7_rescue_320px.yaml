@@ -1,0 +1,130 @@
+# =============================================================================
+# v7_rescue_320px.yaml — V7 RESCUE: simpler losses + multi-slab + light aug
+#
+# Context: V6 (384² D=12, all losses on, nnUNet aug) plateaued at val_dice=0.09
+# at ep24, while V4 (256² D=8, Dice+Tversky only, no aug) hit 0.28 at ep24 and
+# 0.34 at ep45. V7 keeps V6's multi-scale architecture but reverts loss+aug to
+# V4's working regime, and adds multi-slab (4×) data.
+#
+# Deltas vs V6:
+#   - img_size 384 → 320          (less per-step work; decoder chain 20→40→80→160→320)
+#   - slices_per_volume 12 → 8    (matches V4 working config)
+#   - slabs_per_volume: 4         (4× effective train data — 200 → 800)
+#   - light_aug: true             (flip + intensity only; no elastic/gamma/noise)
+#   - focal    0.3 → 0.0          (off)
+#   - boundary 0.2 → 0.0          (off)
+#   - ds_scale 0.4 → 0.15         (down 2.7×)
+#   - deepsup  0.1 → 0.05         (down)
+#   - lr       3e-4 → 1.5e-4      (deeper model benefits from smaller LR)
+#   - warmup_epochs 3 → 1         (quick ramp)
+#   - epochs   50 → 35            (time budget)
+# =============================================================================
+
+experiment:
+  name: "v7_rescue_320"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "organflow_sam2"
+  img_size: 320
+  embed_dim: 256
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder:
+    pretrained: true
+    lora_rank: 32
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph:
+    n_organs: 15
+
+data:
+  dataset: "amos22_multiorgan"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  img_size: 320
+  slices_per_volume: 8
+  slabs_per_volume: 4              # V7: 4× effective training data
+  light_aug: true                  # V7: flip + intensity only
+  target_organs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  num_classes: 1
+  augment: true
+
+training:
+  epochs: 35
+  batch_size: 4
+  grad_accumulation_steps: 2         # eff batch = 8
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+
+  optimizer: "adamw"
+  lr: 1.5e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 1
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  flow_warmup_epochs: 2
+  lambda_flow: 0.5
+  lambda_deepsup: 0.05
+  lambda_anatomy: 0.01
+  lambda_xsc: 0.25
+  lambda_ds_scale: 0.15              # V7: much lower than V6's 0.4
+  lambda_focal: 0.0                  # V7: OFF
+  lambda_boundary: 0.0               # V7: OFF
+
+  all_slice_supervision: false
+  cutmix_prob: 0.0
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+  boundary_ramp_epoch: 50
+
+  loss:
+    w_dice:   0.5
+    w_focal:  0.0
+    w_cldice: 0.0
+    w_iou:    0.0
+    w_boundary: 0.0
+    w_dice_topk: 0.0
+    w_deepsup: 0.0
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 5
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 2
+  vis_every_n_epochs: 10
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: false
+  compute_nsd: false
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  log_every_n_steps: 50
+  log_images: false

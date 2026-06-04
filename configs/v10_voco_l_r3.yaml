@@ -1,0 +1,126 @@
+# configs/v10_voco_l_r3.yaml — Week 1 VoCo-L Run 3 (after Run 2 plateaued at 0.7667).
+#
+# RECIPE LOGIC (2026-04-25):
+#   Run 1 (lr=1e-4, wd=0.01, 50 ep) hit 0.8085 at ep 5 then overfit, was killed
+#   by STOP-RULE at ep 8. Run 2 (lr=3e-5, wd=0.05, 15 ep) plateaued at 0.7667
+#   — under-trained.
+#   Run 3 = Run 1's aggressive LR (proven to reach 0.81+) + Run 2's stronger wd
+#   + short 10-ep cosine so LR halves by ep 5 and post-peak drift is bounded.
+#   Save-every-epoch ensures the peak ckpt is preserved even if STOP-RULE fires.
+#
+# CHANGES vs Run 2:
+#   lr 3e-5 → 1.0e-4
+#   epochs 15 → 10
+#   (everything else kept; bf16 stays for fs=96 stability)
+
+experiment:
+  name: "v10_voco_l_ft_r3"
+  seed: 42
+  output_dir: "checkpoints/v10_voco_l_ft_r3"
+  log_dir: "logs/v10_voco_l_ft_r3"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+
+  proposer:
+    patch_size: 96
+    feature_size: 96
+    use_v2: true
+    pretrained_weights: "checkpoints/pretrained/voco/VoComni_L.pt"
+    deep_supervision: false
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
+
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph: { n_organs: 15 }
+
+  dynamic_pfesa:
+    enabled: false
+    kernel_size: 3
+    organ_dim: 32
+    text_dim: 0
+  boundary_ddpm:
+    enabled: false
+    hidden: 64
+    n_timesteps: 100
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+  copy_paste_prob: 0.0
+  copy_paste_cache: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22/copy_paste_bank.pt"
+
+training:
+  stage: 1
+  epochs: 10
+  batch_size: 1
+  num_workers: 2
+  optimizer:
+    name: "adamw"
+    lr: 1.0e-4                                       # Run 1's value, proven 0.8085 peak
+    weight_decay: 0.05                               # kept from Run 2 (5x stronger than Run 1)
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 1
+  amp: true
+  amp_dtype: "bf16"                                  # fs=96 needs bf16; fp16 → NaN
+  grad_clip: 1.0
+  loss_small_organ: false
+  loss_small_organ_cfg:
+    dice_weight: 1.0
+    tversky_weight: 1.0
+    focal_weight: 0.5
+    tversky_alpha: 0.3
+    tversky_beta: 0.7
+    focal_gamma: 1.5
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.25
+  flow_weight: 0.5
+  deepsup_weight: 0.25
+  teacher_distill: 0.0
+  cross_modal_infonce: 0.0
+  flow_shape_prior: 0.0
+  cascade_consistency_kl: 0.0
+  cascade_consistency_dice: 0.0
+  boundary_ddpm: 0.0
+
+eval:
+  every_n_epochs: 1
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.02
+  max_peak_vram_gb: 23
+  warmstart_missing_key_frac: 0.05

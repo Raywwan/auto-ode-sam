@@ -35,18 +35,26 @@ model:
 data:
   dataset: "totalsegmentator"
   data_root: "D:/data/totalsegmentator"
+  cache_dir: "C:/cache/totalsegmentator"   # fast-disk fp16 cache; D: is HDD
   img_size: 320
   depth: 8
   volume_patch: 96
   hu_clip: [-200, 250]
   slabs_per_volume: 4
   copy_paste_prob: 0.0
+  # Class-balanced sampling: probe found prostate at 40% / gallbladder at
+  # 56% density vs 70-88% for the others. Anchor each batch with a
+  # rare-organ-positive volume so the GATE-I-critical classes get
+  # ~1.6x more exposure than uniform sampling would give.
+  balanced_batch_sampler: true
+  rare_organs: [4, 14, 15]   # gallbladder, bladder, prostate
 
 training:
   stage: 1
   epochs: 10
-  batch_size: 1
-  num_workers: 2
+  batch_size: 2                 # preflight bs=2 dry-run peaked 10.79 GB / 23 GB
+  num_workers: 4                # cache reads are fast; 4 workers no longer disk-bound
+  persistent_workers: true      # avoid worker re-init each epoch
   optimizer: { name: "adamw", lr: 3.0e-5, weight_decay: 0.05 }
   scheduler: { name: "cosine", warmup_epochs: 1 }
   amp: true

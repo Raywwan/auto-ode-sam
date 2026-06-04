@@ -1,0 +1,185 @@
+# =============================================================================
+# phase3a_autoodesam_256px.yaml — Phase 3a: AutoODESAM Full Multi-Organ Training
+#
+# PURPOSE:
+#   Full 15-organ training on the Auto-ODE-SAM V3 architecture.
+#   Fully automatic — no box prompts, no prompt_encoder.
+#   Uses 15 learned organ query tokens decoded by OrganQueryDecoder.
+#
+# ARCHITECTURE (Auto-ODE-SAM V3):
+#   - TinyViT Stage 2 encoder (16×16 features at 256px)
+#   - OrganConditionedBidirectionalNeuralODE (cross-slice, organ-conditioned)
+#   - PFESA spectral high-frequency enhancement (zero params)
+#   - DeepSupervisionHead auxiliary loss at ODE midpoint
+#   - OrganQueryDecoder: 15 organ query tokens → 15 mask logits + IoU scores
+#
+# TRAINING FIXES (all Phase 2 fixes retained):
+#   - All-slice supervision (all D=8 slices backpropped, not just center)
+#   - CutMix augmentation (prob=0.5, proven +4.9% on AMOS22)
+#   - DiceTopK loss (replaces Focal, focuses on hard voxels)
+#   - clDice DISABLED (hurts solid organs — designed for tubular structures)
+#   - Deep supervision at ODE midpoint (w=0.1)
+#   - Boundary loss ramps in at epoch 50 (w=0.1)
+#   - Foreground oversampling (ensures hard organs appear in each batch)
+#   - Layer-wise LR: encoder 0.1× base LR, decoder/ODE at full LR
+#
+# TARGETS:
+#   Primary:   ≥ 0.905 mean DSC (15-organ average) → competitive with MM-UNet
+#   Stretch:   ≥ 0.910 mean DSC → beats MM-UNet
+#   HD95:      ≤ 3.0mm mean HD95 (competitive with nnWNet 3.71mm)
+#
+# TRAINING FROM SCRATCH:
+#   No resume — fair comparison with published methods.
+#
+# ESTIMATED TIME:
+#   ~3–4 days GPU (256px, 15 organs, 100 epochs)
+#   At B=4, D=8, 15 organs × ~150 slices × 0.31s/batch ≈ 7min/epoch
+#
+# RUN:
+#   cd C:\Users\Raywa\Desktop\VoluFormer3D
+#   C:\Users\Raywa\Desktop\LiteSAM3D\.venv\Scripts\python train.py \
+#       --config configs/phase3a_autoodesam_256px.yaml
+#
+# MONITOR:
+#   tensorboard --logdir logs/phase3a_autoodesam_256px_15org
+# =============================================================================
+
+experiment:
+  name: "phase3a_autoodesam_256px_15org_v3"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2          # Stage 2 tap: 16×16 at 256px, 384→256ch
+
+  ode:
+    ode_hidden: 128      # 64→128: richer ODE dynamics function (was dim//4, now dim//2)
+    n_freqs: 6           # 4→6: two extra Fourier time frequencies, near-zero cost
+    substeps: 4          # 2→4: finer Heun integration — free on 4090 (~1% ODE compute)
+    n_organs: 15
+    organ_emb_dim: 64    # 32→64: more expressive per-organ trajectory conditioning
+
+  # PFESA spectral enhancement (zero params)
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  # AutoODESAM has no prompt_encoder — organ queries are learned end-to-end
+  # (no prompt_encoder section)
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  # organ_decoder maps to OrganQueryDecoder constructor args
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # all 15 organs
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 110
+  batch_size: 4
+  grad_accumulation_steps: 4    # Effective batch size = 16
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 5              # Longer warmup for larger dataset
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  # All Phase 2 training fixes
+  all_slice_supervision: true
+  cutmix_prob: 0.5
+
+  # Copy-paste augmentation: paste small-organ donor stacks (full D slices)
+  # onto small-organ target samples. Only triggers for organs {4,5,11,12,13}.
+  # Reduced 0.3→0.1: 0.3 caused DSC oscillation in ep10-20 (model learns
+  # basic organ shapes first; aggressive paste disrupts that before ep30).
+  copypaste_prob: 0.1
+
+  # Foreground oversampling: ensures hard organs appear in each batch
+  foreground_oversampling: true
+
+  # Boundary loss ramps in at epoch 50
+  boundary_ramp_epoch: 50
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0    # OFF: clDice is designed for tubular structures (vessels, airways)
+                           #       and consistently hurts solid organ segmentation
+    w_iou:          0.1
+    w_boundary:     0.1    # Doubled from 0.05: boundary precision is a thesis metric (HD95)
+    w_dice_topk:    0.5
+    w_deepsup:      0.1    # Deep supervision at ODE midpoint (auxiliary head)
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 10
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null  # Fresh start v3: W2 fix (transformer-updated features), skip_gate=0.05, B1 fix
+
+validation:
+  val_every_n_epochs: 5
+  vis_every_n_epochs: 10
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

@@ -17,6 +17,7 @@ if str(REPO) not in sys.path:
 
 from omegaconf import OmegaConf
 from datasets.totalsegmentator import TotalSegmentatorDataset
+from datasets.balanced_sampler import BalancedBatchSampler
 from training.train_v9 import train_stage1
 
 
@@ -35,6 +36,7 @@ def main():
             f"This script requires data.dataset=totalsegmentator, got {cfg.data.dataset}"
         )
 
+    cache_dir = getattr(cfg.data, "cache_dir", None)
     train_ds = TotalSegmentatorDataset(
         data_root=cfg.data.data_root,
         split="train",
@@ -42,6 +44,7 @@ def main():
         hu_clip=tuple(cfg.data.hu_clip),
         slabs_per_volume=int(cfg.data.slabs_per_volume),
         seed=int(cfg.experiment.seed),
+        cache_dir=cache_dir,
     )
     val_ds = TotalSegmentatorDataset(
         data_root=cfg.data.data_root,
@@ -50,11 +53,27 @@ def main():
         hu_clip=tuple(cfg.data.hu_clip),
         slabs_per_volume=int(cfg.data.slabs_per_volume),
         seed=int(cfg.experiment.seed) + 1,
+        cache_dir=cache_dir,
     )
+    if cache_dir:
+        print(f"[totalseg-pretrain] cache_dir={cache_dir}")
     print(f"[totalseg-pretrain] train={len(train_ds.volume_ids)} vols  "
           f"val={len(val_ds.volume_ids)} vols")
 
-    train_stage1(cfg, train_ds=train_ds, val_ds=val_ds)
+    train_sampler = None
+    if bool(getattr(cfg.data, "balanced_batch_sampler", False)):
+        rare = list(cfg.data.rare_organs)
+        train_sampler = BalancedBatchSampler(
+            dataset=train_ds,
+            batch_size=int(cfg.training.batch_size),
+            rare_organs=rare,
+            shuffle=True,
+            seed=int(cfg.experiment.seed),
+        )
+        print(f"[totalseg-pretrain] BalancedBatchSampler ON  rare_organs={rare}  "
+              f"pools={ {o: len(p) for o, p in train_sampler._pool.items()} }")
+
+    train_stage1(cfg, train_ds=train_ds, val_ds=val_ds, train_sampler=train_sampler)
 
 
 if __name__ == "__main__":

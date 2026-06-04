@@ -1,0 +1,172 @@
+# =============================================================================
+# path_a1_big_solid.yaml -- Path A1 (2026-04-28 ACTIVE)
+#
+# Mission: Extend ODE-SAM V2 single-organ liver (DSC 0.9358) to K=4 big solid
+# organs (liver, spleen, R-kidney, L-kidney) on AMOS22.
+#
+# AMOS22 organ IDs (from datasets/amos22.py):
+#   1=spleen, 2=R-kidney, 3=L-kidney, 6=liver
+#
+# Architecture: AutoODESAM (V3) - 15-channel decoder, supervised on 4 organs.
+#   Trainer's `is_auto_ode` path gathers the per-sample organ channel from the
+#   (B, 15, H, W) output via `organ_idxs = (organ_id - 1).long()`.
+#   With target_organs=[1,2,3,6] -> indices {0,1,2,5}.
+#
+# Warmstart: encoder.* keys from V2 ckpt
+#   (C:\Users\Raywa\Desktop\VoluFormer3D\checkpoints\phase3_odesam_v2_256px_liver\
+#    phase3_odesam_v2_256px_liver_best.pt -- 216 MB, was at epoch 15).
+#   ODE/decoder keys re-init: V2 used non-organ-conditioned ODE + PromptEncoder
+#   + MaskDecoder; V3 has organ-conditioned ODE + OrganQueryDecoder.
+#   Warmstart prep done by scripts/prepare_a1_warmstart.py.
+#
+# Targets (per project_path_a1_big_solid_organs.md):
+#   floor:   mean DSC >= 0.91
+#   stretch: mean DSC >= 0.94
+#   liver:   floor 0.94 stretch 0.96
+#
+# Anti-pivot: gate-fail at ep 4/8/12/14 -> debug, don't pivot. Fallback A0.
+#
+# Deviations from doc plan (with reason):
+#   - architecture key: "auto_ode_sam" (registry name; doc said _v3)
+#   - n_organs internal: 15 (decoder fixed; supervised via target_organs=[1,2,3,6])
+#   - dataset: "amos22_3d" (doc said amos22_v9 -- not registered)
+#   - img_size 256 (doc said 320 -- 256 matches V2 encoder warmstart)
+#   - mixed_precision: true (fp16; bf16 needed only for VoCo-L/H per memory)
+#   - copypaste_prob 0.0 (donor pool is small organs {4,5,11,12,13}, none of ours)
+#   - foreground_oversampling: false (small-organ pool empty for our target set)
+# =============================================================================
+
+experiment:
+  name: "path_a1_big_solid"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true        # V2 warmstart will overwrite encoder.*
+  encoder_freeze_backbone: false  # full FT
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2                # Stage-2 16x16 features at 256px (matches V2)
+
+  ode:
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+    n_organs: 15                  # decoder fixed at 15; we supervise 4 IDs
+    organ_emb_dim: 64
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false                # required for train.py print line; AutoODESAM ignores it
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 2, 3, 6]     # spleen, R-kidney, L-kidney, liver
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 14
+  batch_size: 2                   # plan calls for batch_size 2 (memory headroom)
+  grad_accumulation_steps: 8      # effective batch = 16 (matches V2 effective)
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true           # fp16 (V2 trained successfully with fp16)
+  optimizer: "adamw"
+  lr: 2.0e-5                      # gentle FT from V2 encoder
+  lr_min: 1.0e-6
+  weight_decay: 0.05              # plan says 0.05
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 2
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+  encoder_lr_scale: 0.1           # encoder LR = 2e-6, decoder/ODE = 2e-5
+
+  # All-slice supervision retained (V2 + V3 both use it)
+  all_slice_supervision: true
+
+  # CutMix DISABLED for AutoODESAM (trainer skips automatically; explicit here)
+  cutmix_prob: 0.0
+
+  # Copy-paste only triggers for organs {4,5,11,12,13} -- none in our target set.
+  # Setting to 0 to avoid wasted donor-index lookup in __getitem__.
+  copypaste_prob: 0.0
+
+  # Foreground oversampling small-organ pool is {4,5,11,12,13}; empty for us.
+  foreground_oversampling: false
+
+  # Boundary loss ramp: 14 ep total, ramp at ep 8 -> last 6 ep get boundary loss
+  boundary_ramp_epoch: 8
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0           # tubular-structure loss; OFF for solid organs
+    w_iou:          0.1
+    w_boundary:     0.1
+    w_dice_topk:    0.5
+    w_deepsup:      0.1
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 1          # 14 ep total -- keep all
+  keep_top_k: 5
+  monitor_metric: "val_dice"
+  resume_from: "checkpoints/path_a1_big_solid/path_a1_big_solid_warmstart.pt"
+
+validation:
+  val_every_n_epochs: 1           # validate every epoch (14-ep run)
+  vis_every_n_epochs: 2
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

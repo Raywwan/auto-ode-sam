@@ -1,0 +1,190 @@
+# =============================================================================
+# path_a1_big_solid_v2hp.yaml -- Path A1 Stage A debug retry (2026-04-29)
+#
+# RESCUE attempt for failed A1 run (val_dice peaked 0.33 at ep 1, degraded to
+# 0.17 at ep 8; loss decreased monotonically while metric degraded -> hyper-
+# parameters destroyed the model after warmup).
+#
+# CHANGES vs path_a1_big_solid.yaml (V2-aligned, memory-validated):
+#   lr                       2.0e-5 -> 1.0e-4    (V2 used 1e-4; current LR too
+#                                                  gentle for fresh decoder/ODE)
+#   diversity_loss_weight    0.01   -> 0.0       (off; was promoting query
+#                                                  orthogonality without metric
+#                                                  improvement -- diagnostic
+#                                                  showed cos~0 at ep 1 already)
+#   boundary_ramp_epoch      8      -> 2         (boundary loss active early to
+#                                                  push positive commitment;
+#                                                  was fighting with schedule)
+#   epochs                   14     -> 25        (user OK'd extending; gives
+#                                                  the V2-style cosine schedule
+#                                                  room to converge)
+#   warmup_epochs            2      -> 3         (longer warmup at 5x peak LR)
+#   experiment.name          path_a1_big_solid -> path_a1_big_solid_v2hp
+#                                                  (separate ckpt dir; preserves
+#                                                  failed run for postmortem)
+#
+# DELIBERATELY KEPT (memory-validated -- do NOT change):
+#   w_dice_topk        0.5    (memory: w_dice_topk now invokes PMDiceLoss not
+#                              DiceTopKLoss; +1.85-2.66 DSC on multi-organ
+#                              -- removing this was my error)
+#   w_dice             0.5    (V2 also used 0.5; rebalance with PMDice)
+#   w_cldice           0.0    (memory: clDice HURTS solid organs -- V2 had it
+#                              but later analysis showed it was net negative)
+#   w_focal            0.0    (no focal in V2 either)
+#
+# UNCHANGED from path_a1_big_solid.yaml:
+#   - architecture auto_ode_sam (cannot pivot per anti-pivot rule)
+#   - target_organs [1, 2, 3, 6]
+#   - img_size 256, embed_dim 256
+#   - batch 2 x accum 8 = effective 16
+#   - encoder_lr_scale 0.1 (gentle FT on V2-warmstart encoder)
+#   - resume_from -> warmstart (V2 encoder weights only)
+#
+# TRAINER LIMITATION (cannot fix without code change):
+#   - CutMix is hardcoded OFF for auto_ode_sam at trainer.py:457 (mixing items
+#     with different organ_ids would break per-item gather). V2 used CutMix
+#     prob 0.5 -- can't reuse here.
+#
+# GO/NO-GO at ep 3:
+#   - liver DSC >= 0.80     (was 0.78 at ep 1 of failed run; should hold/improve)
+#   - mean DSC  >= 0.30     (was 0.27 at ep 1 of failed run)
+#   - kidneys >= 0.05 each  (CRITICAL -- if still 0.00 at ep 3, structural issue
+#                             with OrganQueryDecoder L/R disambiguation -> Stage B)
+#
+# GATE at ep 8 (was ep_4 in original plan -- shifted because of warmup change):
+#   - mean DSC >= 0.78
+#   - liver DSC >= 0.85
+# =============================================================================
+
+experiment:
+  name: "path_a1_big_solid_v2hp"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2
+
+  ode:
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+    n_organs: 15
+    organ_emb_dim: 64
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.0    # OFF -- was 0.01 in failed run
+
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 2, 3, 6]
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 25                    # was 14; user OK'd extending
+  batch_size: 2
+  grad_accumulation_steps: 8
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-4                    # was 2.0e-5 -- match V2's peak LR
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 3              # was 2; longer warmup at the higher peak LR
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+  encoder_lr_scale: 0.1         # encoder LR = 1e-5 (V2 was at 1e-4 from
+                                # scratch, but here encoder is V2-FT already
+                                # so gentle FT still appropriate)
+
+  all_slice_supervision: true
+
+  cutmix_prob: 0.0              # trainer hardcodes OFF for auto_ode_sam anyway
+
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+
+  boundary_ramp_epoch: 2        # was 8 -- active early to push positive
+                                # commitment
+
+  loss:
+    w_dice:         0.5         # unchanged from failed run (memory-validated)
+    w_focal:        0.0
+    w_cldice:       0.0         # OFF: memory note "clDice hurts solid organs"
+    w_iou:          0.1
+    w_boundary:     0.1
+    w_dice_topk:    0.5         # KEEP: this is now PMDiceLoss (Hosseini 2025)
+                                # not the old DiceTopK. Memory: +1.85-2.66 DSC
+                                # on multi-organ tasks. Disabling was my error.
+    w_deepsup:      0.1
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 1
+  keep_top_k: 5
+  monitor_metric: "val_dice"
+  resume_from: "checkpoints/path_a1_big_solid/path_a1_big_solid_warmstart.pt"
+
+validation:
+  val_every_n_epochs: 1
+  vis_every_n_epochs: 2
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

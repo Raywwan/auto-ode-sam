@@ -7,18 +7,11 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
-
-def _ns(d):
-    if isinstance(d, dict):
-        return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
-    return d
 
 
 def main() -> None:
@@ -27,8 +20,9 @@ def main() -> None:
         return
 
     import yaml
+    from omegaconf import OmegaConf
     cfg_dict = yaml.safe_load(open(ROOT / "configs/v9_tierB.yaml"))
-    cfg = _ns(cfg_dict)
+    cfg = OmegaConf.create(cfg_dict)
 
     from models.voluformer_v9 import VoluFormerV9
     torch.manual_seed(0)

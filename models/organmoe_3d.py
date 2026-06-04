@@ -131,14 +131,31 @@ class MoELoRALinear(nn.Module):
         B, T, D = x_bt.shape
         if organ_presence is None:
             organ_presence = torch.zeros(B, self.router.n_organs, device=x.device, dtype=x.dtype)
+        else:
+            # Inside Swin windowed attention, x has batch B*num_windows while
+            # cached presence stays at the original B_orig. Replicate per
+            # window so each window inherits its source volume's presence.
+            pres_B = organ_presence.shape[0]
+            if pres_B != B:
+                if B % pres_B != 0:
+                    raise RuntimeError(
+                        f"MoELoRALinear: x batch {B} is not a multiple of "
+                        f"presence batch {pres_B}; cannot align routing"
+                    )
+                organ_presence = organ_presence.repeat_interleave(B // pres_B, dim=0)
+            organ_presence = organ_presence.to(dtype=x_bt.dtype)
         gate, _topk = self.router(x_bt, organ_presence)        # gate: (B, K, T)
 
         base_out = self.base(x_bt)                              # (B, T, out)
+        # Always run all K experts (no skip-on-zero branch). The skip path
+        # was non-deterministic across original-vs-checkpoint-recompute
+        # forwards (bf16 numerical noise can flip g_k.abs().sum() between
+        # 0 and ~1e-9), which broke gradient checkpointing's tensor-count
+        # invariant. LoRA experts are tiny (~rank*D flops each), so K-way
+        # always-on is cheap.
         expert_out = base_out.new_zeros(B, T, self.out_features)
         for k in range(self.n_experts):
             g_k = gate[:, k, :].unsqueeze(-1)                   # (B, T, 1)
-            if g_k.abs().sum() == 0:
-                continue
             e_k = self.experts[k](x_bt)                          # (B, T, out)
             expert_out = expert_out + g_k * e_k
         out = base_out + expert_out

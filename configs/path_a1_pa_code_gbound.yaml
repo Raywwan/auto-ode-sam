@@ -1,0 +1,163 @@
+# =============================================================================
+# path_a1_pa_code_gbound.yaml -- PA-CODE with bounded gamma  2026-05-01
+#
+# Two prior PA-CODE attempts both failed by ep4-5 with sustained val
+# oscillation (zigzag pattern, ep2 collapse, ep5 still 0.16-0.17):
+#   LR 2e-4: ep0 0.196  ep1 0.223  ep2 0.092  ep3 0.208  ep4 0.135  ep5 0.165
+#   LR 1e-4: ep0 0.090  ep1 0.219  ep2 0.080  ep3 0.187  ep4 0.173  (killed)
+#
+# Diagnosis (diag_pa_code_filmhead_drift.py on saved ckpts):
+#   - FiLM heads ARE moving (43% relative L2 in 5 ep) -- gradient flows fine.
+#   - Per-organ FiLM-gamma spread (sigma-across-organs) climbed from 0 to 0.49
+#     in 5 epochs. Per-organ |gamma| reached +/- 1.78 (well outside [0.5, 1.5]).
+#   - Such large gamma reshapes feature scale beyond what the V2 decoder was
+#     trained on -> decoder cannot map features to masks -> val collapses
+#     while train loss looks healthy.
+#
+# Architectural fix: bound gamma to [1 - gamma_bound, 1 + gamma_bound] via
+#   gamma = 1 + gamma_bound * tanh(gamma_raw - 1)
+# at gamma_bound=0.5, gamma in [0.5, 1.5]. Identity-init preserved
+# (gamma_raw=1 -> tanh(0)=0 -> gamma=1). Verified by scripts/verify_gamma_bound.py.
+#
+# Save dir: checkpoints/path_a1_pa_code_gbound/  (separate from prior 2).
+# Single-axis change vs lr1e4: gamma_bound: 0.5 added.
+# =============================================================================
+
+experiment:
+  name: "path_a1_pa_code_gbound"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2
+
+  ode:
+    use_pa_code: true
+    n_pos_freqs: 4
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+    n_organs: 15
+    organ_emb_dim: 64
+    gamma_bound: 0.5              # NEW. tanh-bounded FiLM gamma in [0.5, 1.5].
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  organ_query_decoder:
+    n_organs: 15
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 2, 3, 6]
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 40
+  encoder_freeze_epochs: 5
+  batch_size: 2
+  grad_accumulation_steps: 8
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+
+  optimizer: "adamw"
+  lr: 1.0e-4                      # Same as lr1e4 run -- isolate gamma_bound effect.
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 3
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  encoder_lr_scale: 0.05          # encoder peak LR = 1e-4 * 0.05 = 5e-6
+
+  all_slice_supervision: true
+  cutmix_prob: 0.0
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+
+  boundary_ramp_epoch: 12
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0
+    w_iou:          0.1
+    w_boundary:     0.1
+    w_dice_topk:    0.5
+    w_deepsup:      0.1
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 1
+  keep_top_k: 10
+  monitor_metric: "val_dice_3d"
+  best_min_delta: 0.005
+  # Resume from epoch 0 latest.pt after PC shutdown 2026-05-02 ~02:44 mid-ep1.
+  # ep0 completed cleanly: val_dice_3d=0.1961, gamma_sigma=0.000 (bound holding, identity init intact).
+  # Original warmstart was: checkpoints/path_a1_pa_code/path_a1_pa_code_warmstart.pt
+  resume_from: "checkpoints/path_a1_pa_code_gbound/path_a1_pa_code_gbound_latest.pt"
+
+validation:
+  val_every_n_epochs: 1
+  vis_every_n_epochs: 2
+  use_val_dice_3d: true
+  val_dice_3d_n_vols: 4
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

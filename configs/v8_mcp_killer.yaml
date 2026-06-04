@@ -1,0 +1,131 @@
+# =============================================================================
+# v8_mcp_killer.yaml — V8: warm-start V7 + BiomedCLIP text + DINOv2 fusion
+#
+# Goal: beat MCP-MedSAM (0.79-0.82 CT Dice) on AMOS22 via V7 baseline + three
+# principled additions (text prior, DINOv2 features, proper 3D eval).
+#
+# Warm-start policy: load V7's final checkpoint; text + dino modules init
+# fresh. Lambda_dino_gate ramps over warmup_epochs.
+# =============================================================================
+
+experiment:
+  name: "v8_mcp_killer"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "organflow_sam2_v8"
+  img_size: 320
+  embed_dim: 256
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder:
+    pretrained: true
+    lora_rank: 32
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph:
+    n_organs: 15
+  v8:
+    use_text: true
+    use_dino: true
+    dino_variant: "dinov2_vits14"    # 84 MB, 384-dim features
+    dino_img_size: 336               # multiple of 14
+
+data:
+  dataset: "amos22_multiorgan"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  img_size: 320
+  slices_per_volume: 8
+  slabs_per_volume: 4
+  light_aug: true
+  target_organs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  num_classes: 1
+  augment: true
+
+training:
+  epochs: 25                          # warm-start from V7 → fewer epochs
+  batch_size: 3                       # V8 adds DINOv2 → budget more VRAM headroom
+  grad_accumulation_steps: 3          # eff batch = 9
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+
+  optimizer: "adamw"
+  lr: 7.5e-5                          # half V7's (warm-start + extra modules)
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+  scheduler: "cosine_warmup"
+  warmup_epochs: 1
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  flow_warmup_epochs: 1
+  lambda_flow: 0.5
+  lambda_deepsup: 0.05
+  lambda_anatomy: 0.01
+  lambda_xsc: 0.25
+  lambda_ds_scale: 0.15
+  lambda_focal: 0.0
+  lambda_boundary: 0.0
+
+  all_slice_supervision: false
+  cutmix_prob: 0.0
+  copypaste_prob: 0.0
+  foreground_oversampling: false
+  boundary_ramp_epoch: 50
+
+  loss:
+    w_dice:   0.5
+    w_focal:  0.0
+    w_cldice: 0.0
+    w_iou:    0.0
+    w_boundary: 0.0
+    w_dice_topk: 0.0
+    w_deepsup: 0.0
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    cldice_iterations: 3
+
+  warm_start:
+    enabled: true
+    path: "checkpoints/v7_rescue_320/best.pt"   # set post-V7
+    strict: false
+
+checkpoint:
+  save_every_n_epochs: 5
+  keep_top_k: 3
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 2
+  vis_every_n_epochs: 10
+  use_3d_sliding_window: true         # V8: always validate with proper 3D eval
+  use_tta: true
+  tta_transforms: ["id", "hflip", "vflip"]
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true                  # MCP-comparable reporting
+  compute_nsd: false
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  log_every_n_steps: 50
+  log_images: false

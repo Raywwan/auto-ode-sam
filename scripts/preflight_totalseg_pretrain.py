@@ -191,10 +191,39 @@ def main():
     # 6) DataLoader smoke (single worker, ~5 batches) -----------------------
     print("[6/6] DataLoader smoke (5 batches)")
     from torch.utils.data import DataLoader
-    loader = DataLoader(
-        train_ds, batch_size=int(cfg.training.batch_size),
-        num_workers=0, shuffle=True,
-    )
+    use_balanced = bool(getattr(cfg.data, "balanced_batch_sampler", False))
+    if use_balanced:
+        from datasets.balanced_sampler import BalancedBatchSampler
+        rare = list(cfg.data.rare_organs)
+        # Time the sampler init — this is the cost paid once at every launch.
+        t_si = time.time()
+        sampler = BalancedBatchSampler(
+            dataset=train_ds,
+            batch_size=int(cfg.training.batch_size),
+            rare_organs=rare,
+            shuffle=True,
+            seed=int(cfg.experiment.seed),
+        )
+        si_dt = time.time() - t_si
+        pools = {o: len(p) for o, p in sampler._pool.items()}
+        print(f"  BalancedBatchSampler init: {si_dt:.1f}s  "
+              f"rare_organs={rare}  pools={pools}")
+        if si_dt > 120:
+            print(f"  [WARN] sampler init took {si_dt:.0f}s — "
+                  f"build presence cache via scripts/build_totalseg_presence.py")
+        # Empty pool would mean rare organ literally absent from train split.
+        empty = [o for o in rare if pools.get(o, 0) == 0]
+        if empty:
+            fail(f"BalancedBatchSampler has empty pools for {empty}. "
+                 f"These rare organs are entirely absent from the train split.")
+        loader = DataLoader(
+            train_ds, batch_sampler=sampler, num_workers=0,
+        )
+    else:
+        loader = DataLoader(
+            train_ds, batch_size=int(cfg.training.batch_size),
+            num_workers=0, shuffle=True,
+        )
     t0 = time.time()
     for i, b in enumerate(loader):
         if i >= 5:

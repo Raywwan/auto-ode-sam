@@ -29,6 +29,36 @@ except ImportError:  # pragma: no cover
     _MONAISwinUNETR = None
 
 
+class _SwinLoRALinear(nn.Module):
+    """LoRA-adapted nn.Linear. y = W x + (B A) x * (alpha / r). Base W is frozen."""
+
+    def __init__(self, base: nn.Linear, rank: int = 16, alpha: float = 16.0):
+        super().__init__()
+        self.base = base
+        for p in self.base.parameters():
+            p.requires_grad = False
+        self.rank = rank
+        self.scale = alpha / rank
+        self.lora_A = nn.Parameter(torch.zeros(rank, base.in_features))
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank))
+        nn.init.kaiming_uniform_(self.lora_A, a=5 ** 0.5)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.base(x) + F.linear(F.linear(x, self.lora_A), self.lora_B) * self.scale
+
+
+def _inject_lora_into_swin(module: nn.Module, rank: int, alpha: float) -> int:
+    """Replace nn.Linear named qkv/proj/fc1/fc2 inside swinViT with LoRA wrappers."""
+    n = 0
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.Linear) and name in ("qkv", "proj", "fc1", "fc2"):
+            setattr(module, name, _SwinLoRALinear(child, rank=rank, alpha=alpha))
+            n += 1
+        else:
+            n += _inject_lora_into_swin(child, rank, alpha)
+    return n
+
+
 class SwinUNETRProposer(nn.Module):
     """3D SwinUNETR wrapper that emits (B, n_organs, D, H, W) probabilities.
 
@@ -279,16 +309,27 @@ class SwinUNETRProposer(nn.Module):
         return getattr(self, "_last_presence_logits", None)
 
     def collect_last_gates(self):
-        """Mean gate weights across all MoELoRALinear modules. None if OrganMoE off."""
+        """Concatenate per-layer routing decisions into (1, K, N) for the
+        Switch-Transformer load-balance loss. Each MoELoRALinear caches its
+        gate as (B_l*W_l, K, T_l) where (B_l*W_l, T_l) varies across Swin
+        stages (deeper stages have fewer windows but more tokens per window),
+        so stacking shapes across layers fails. We collapse each layer to
+        (N_l = B_l*W_l*T_l, K), concat across layers, and present as
+        (1, K, N_total). Returns None if OrganMoE off."""
         from models.organmoe_3d import MoELoRALinear
-        gates = []
+        parts = []
+        K = None
         for m in self.modules():
             if isinstance(m, MoELoRALinear) and getattr(m, "_last_gate", None) is not None:
-                g = m._last_gate
-                gates.append(g.mean(dim=-1, keepdim=True))
-        if not gates:
+                g = m._last_gate                                   # (B_l*W_l, K, T_l)
+                if K is None:
+                    K = g.shape[1]
+                # (B_l*W_l, K, T_l) -> (B_l*W_l*T_l, K)
+                parts.append(g.transpose(1, 2).reshape(-1, K))
+        if not parts:
             return None
-        return torch.stack(gates, dim=0).mean(dim=0)
+        cat = torch.cat(parts, dim=0)                             # (N_total, K)
+        return cat.transpose(0, 1).unsqueeze(0)                   # (1, K, N_total)
 
     # -- teacher-distillation hook management (Novel #3) --------------------
 
@@ -347,33 +388,3 @@ class SwinUNETRProposer(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return {"total": total, "trainable": trainable, "frozen": total - trainable}
-
-
-class _SwinLoRALinear(nn.Module):
-    """LoRA-adapted nn.Linear. y = W x + (B A) x * (alpha / r). Base W is frozen."""
-
-    def __init__(self, base: nn.Linear, rank: int = 16, alpha: float = 16.0):
-        super().__init__()
-        self.base = base
-        for p in self.base.parameters():
-            p.requires_grad = False
-        self.rank = rank
-        self.scale = alpha / rank
-        self.lora_A = nn.Parameter(torch.zeros(rank, base.in_features))
-        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank))
-        nn.init.kaiming_uniform_(self.lora_A, a=5 ** 0.5)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.base(x) + F.linear(F.linear(x, self.lora_A), self.lora_B) * self.scale
-
-
-def _inject_lora_into_swin(module: nn.Module, rank: int, alpha: float) -> int:
-    """Replace nn.Linear named qkv/proj/fc1/fc2 inside swinViT with LoRA wrappers."""
-    n = 0
-    for name, child in list(module.named_children()):
-        if isinstance(child, nn.Linear) and name in ("qkv", "proj", "fc1", "fc2"):
-            setattr(module, name, _SwinLoRALinear(child, rank=rank, alpha=alpha))
-            n += 1
-        else:
-            n += _inject_lora_into_swin(child, rank, alpha)
-    return n

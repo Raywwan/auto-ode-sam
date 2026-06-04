@@ -1,0 +1,107 @@
+# configs/v9_stage1_finetune.yaml — Stage 1 fine-tune from last.pt with the
+# 2026-04-22 dataset fixes (random/jittered (y0, x0) crop + L-R flip aug
+# + paired-organ label & organ_id remap on flip).
+#
+# Goal: lift lateralized-organ Dice (kidneys, adrenals, gallbladder, stomach)
+# without re-training from scratch (~6 days). 10 epochs on 4090 ≈ 24 h.
+#
+# Output dir is segregated so the proven checkpoints/v9_stage1/last.pt is never
+# overwritten — if the fine-tune regresses, we revert to the original.
+
+experiment:
+  name: "v9_stage1_ft"
+  seed: 42
+  output_dir: "checkpoints/v9_stage1_ft"
+  log_dir: "logs/v9_tierB_ft"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+
+  proposer:
+    patch_size: 96
+    feature_size: 48
+    use_v2: true
+    pretrained_weights: "checkpoints/pretrained/model_swinvit.pt"
+
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph: { n_organs: 15 }
+
+  dynamic_pfesa:
+    enabled: false
+    kernel_size: 3
+    organ_dim: 32
+    text_dim: 0
+  boundary_ddpm:
+    enabled: false
+    hidden: 64
+    n_timesteps: 100
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+
+training:
+  stage: 1
+  epochs: 10
+  batch_size: 2
+  num_workers: 2
+  proposer_ckpt: "checkpoints/v9_stage1/last.pt"
+  optimizer:
+    name: "adamw"
+    lr: 5.0e-5
+    weight_decay: 0.01
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 1
+  amp: true
+  grad_clip: 1.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.25
+  flow_weight: 0.5
+  deepsup_weight: 0.25
+  teacher_distill: 0.0
+  cross_modal_infonce: 0.0
+  flow_shape_prior: 0.0
+  cascade_consistency_kl: 0.0
+  cascade_consistency_dice: 0.0
+  boundary_ddpm: 0.0
+
+eval:
+  every_n_epochs: 2
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.02
+  max_peak_vram_gb: 22
+  warmstart_missing_key_frac: 0.10

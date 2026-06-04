@@ -184,11 +184,17 @@ def _val_metrics(
     val_loader: DataLoader,
     stage: int,
     device,
-    max_batches: int = 20,
+    max_batches: int = 10_000,
 ) -> Dict[str, float]:
     """Full evaluation — per-organ Dice for proposer (3D patch) and, for
     Stage 2/3, refiner + fused (2D slab center). Empty-GT channels are
     excluded from means. Returns flat dict suitable for TensorBoard logging.
+
+    Proposer prediction uses 16-way softmax argmax (NOT a per-channel >0.5
+    threshold on the bg-dropped probs, which systematically rejects voxels
+    whose softmax mass is split across competing organs/background and was
+    found to under-read true Dice by 0.10-0.20 on strong organs and HIDE
+    failures on weak organs).
     """
     model.eval()
     K = len(ORGAN_NAMES)
@@ -197,6 +203,14 @@ def _val_metrics(
     ref_sum  = [0.0] * K; ref_n  = [0] * K
     fus_sum  = [0.0] * K; fus_n  = [0] * K
 
+    def _argmax_to_per_organ_bin(full_probs: torch.Tensor) -> torch.Tensor:
+        """(B, K+1, D, H, W) softmax -> (B, K, D, H, W) one-hot per organ."""
+        cls = full_probs.argmax(dim=1)                                 # (B, D, H, W)
+        n_organs = full_probs.shape[1] - 1
+        return torch.stack(
+            [(cls == k + 1).float() for k in range(n_organs)], dim=1
+        )
+
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if i >= max_batches:
@@ -204,10 +218,10 @@ def _val_metrics(
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             if stage == 1:
-                probs = model.proposer(batch["volume"])["probs"]    # (B, K, D, H, W)
-                pred_bin = (probs > 0.5).float()
-                gt = batch["mask_volume"]                           # (B, K, D, H, W)
-                d = _soft_dice_per_channel(pred_bin, gt, dims=(2, 3, 4))  # (B, K)
+                full_probs = model.proposer(batch["volume"])["full_probs"]  # (B, K+1, D, H, W)
+                pred_bin = _argmax_to_per_organ_bin(full_probs)
+                gt = batch["mask_volume"]                                    # (B, K, D, H, W)
+                d = _soft_dice_per_channel(pred_bin, gt, dims=(2, 3, 4))     # (B, K)
                 for k in range(K):
                     vals = d[:, k]
                     keep = ~torch.isnan(vals)
@@ -225,8 +239,8 @@ def _val_metrics(
                     stage=stage,
                 )
                 # Proposer patch-level 3D (always available).
-                probs = out["proposer"]["probs"]
-                pred_bin = (probs > 0.5).float()
+                full_probs = out["proposer"]["full_probs"]
+                pred_bin = _argmax_to_per_organ_bin(full_probs)
                 d = _soft_dice_per_channel(pred_bin, batch["mask_volume"], dims=(2, 3, 4))
                 for k in range(K):
                     keep = ~torch.isnan(d[:, k])
@@ -350,23 +364,28 @@ def train(cfg, train_ds=None, val_ds=None, train_sampler=None,
         )
     print(f"[train_v9] train vols={len(train_ds.volume_ids)}  val vols={len(val_ds.volume_ids)}")
 
+    persistent = bool(getattr(cfg.training, "persistent_workers", False))
+    nw = int(cfg.training.num_workers)
     if train_sampler is not None:
         train_loader = DataLoader(
             train_ds, batch_sampler=train_sampler,
-            num_workers=cfg.training.num_workers,
+            num_workers=nw,
             pin_memory=(device.type == "cuda"),
+            persistent_workers=(persistent and nw > 0),
         )
         print(f"[train_v9] using injected train_sampler "
               f"({type(train_sampler).__name__})")
     else:
         train_loader = DataLoader(
             train_ds, batch_size=cfg.training.batch_size, shuffle=True,
-            num_workers=cfg.training.num_workers, pin_memory=(device.type == "cuda"),
+            num_workers=nw, pin_memory=(device.type == "cuda"),
             drop_last=True,
+            persistent_workers=(persistent and nw > 0),
         )
     val_loader = DataLoader(
         val_ds, batch_size=cfg.training.batch_size, shuffle=False,
-        num_workers=cfg.training.num_workers, pin_memory=(device.type == "cuda"),
+        num_workers=nw, pin_memory=(device.type == "cuda"),
+        persistent_workers=(persistent and nw > 0),
     )
 
     # --- model ---
@@ -386,10 +405,25 @@ def train(cfg, train_ds=None, val_ds=None, train_sampler=None,
         keep = {k: v for k, v in full.items() if k.startswith("proposer.")}
         missing, unexpected = model.load_state_dict(keep, strict=False)
         prop_missing = [k for k in missing if k.startswith("proposer.")]
+        n_proposer = sum(1 for k in model.state_dict() if k.startswith("proposer."))
+        miss_frac = len(prop_missing) / max(1, n_proposer)
         print(
             f"[train_v9]   proposer keys: loaded={len(keep)} "
-            f"missing_in_proposer={len(prop_missing)} unexpected={len(unexpected)}"
+            f"missing_in_proposer={len(prop_missing)} unexpected={len(unexpected)} "
+            f"missing_frac={miss_frac:.3f}"
         )
+        # Enforce safety threshold from cfg.safety.warmstart_missing_key_frac
+        # (was a config field with no enforcement — caught during architectural
+        # audit on 2026-04-27). Aborts before training if too many proposer
+        # weights are randomly initialized — protects against shape-rename
+        # regressions that silently warm-start nothing.
+        miss_thresh = float(getattr(getattr(cfg, "safety", {}), "warmstart_missing_key_frac", 1.0))
+        if miss_thresh < 1.0 and miss_frac > miss_thresh:
+            raise RuntimeError(
+                f"[train_v9] proposer warmstart missing_frac {miss_frac:.3f} "
+                f"exceeds safety threshold {miss_thresh:.3f}. "
+                f"Aborting before training. Inspect ckpt vs current model arch."
+            )
 
     trainer = V9Trainer(model, cfg)
 
@@ -493,6 +527,26 @@ def train(cfg, train_ds=None, val_ds=None, train_sampler=None,
                             presence_logits=presence_logits,
                             gate_weights=gate_weights,
                         )
+                        # Deep supervision: OrganMoELoss has no aux signature, so
+                        # apply CE on each aux head here against label downsampled
+                        # to match the aux feature resolution. Without this the
+                        # decoder3/4/5 aux_heads run forward but contribute zero
+                        # gradient.
+                        aux_logits = out["proposer"].get("aux_logits", {}) or {}
+                        if ds_w > 0.0 and aux_logits:
+                            aux_total = losses["total"].new_zeros(())
+                            n_aux = 0
+                            for _name, al in aux_logits.items():
+                                target_size = al.shape[-3:]
+                                lbl_aux = F.interpolate(
+                                    seg_target.float().unsqueeze(1),
+                                    size=target_size, mode="nearest",
+                                ).squeeze(1).long()
+                                aux_total = aux_total + F.cross_entropy(al, lbl_aux)
+                                n_aux += 1
+                            aux_total = aux_total / max(n_aux, 1)
+                            losses["deep_sup"] = aux_total
+                            losses["total"] = losses["total"] + ds_w * aux_total
                     else:
                         losses = stage1_loss(
                             out, batch,

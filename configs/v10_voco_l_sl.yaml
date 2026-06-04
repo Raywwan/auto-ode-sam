@@ -1,0 +1,121 @@
+# configs/v10_voco_l_sl.yaml — Week 2 ablation: SMALL-ORGAN LOSS only.
+#
+# Axis = SmallOrganLoss (inv-vol weighted Dice + Tversky β=0.7 + focal γ=1.5).
+# All other Phase C flags stay OFF.
+#
+# GATE: >=0.02 lift. Watch weak organs (pancreas, stomach, adrenals, duodenum).
+
+experiment:
+  name: "v10_voco_l_sl"
+  seed: 42
+  output_dir: "checkpoints/v10_voco_l_sl"
+  log_dir: "logs/v10_voco_l_sl"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+
+  proposer:
+    patch_size: 96
+    feature_size: 96
+    use_v2: true
+    # No raw VoCo load — W1 base loaded via CLI --proposer_ckpt epoch_009.pt.
+    pretrained_weights: null
+    deep_supervision: false
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
+
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 32 }
+  pfesa: {}
+  ode:
+    n_organs: 15
+    organ_emb_dim: 32
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+  decoder:
+    n_organs: 15
+    transformer_depth: 6
+    transformer_mlp_dim: 3072
+  graph: { n_organs: 15 }
+
+  dynamic_pfesa:
+    enabled: false
+    kernel_size: 3
+    organ_dim: 32
+    text_dim: 0
+  boundary_ddpm:
+    enabled: false
+    hidden: 64
+    n_timesteps: 100
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+  copy_paste_prob: 0.0
+  copy_paste_cache: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22/copy_paste_bank.pt"
+
+training:
+  stage: 1
+  # Resume FT from W1 base (Run 3 ep 9, val 0.7967). 10 ep cosine matches CP/DS.
+  epochs: 10
+  batch_size: 1
+  num_workers: 2
+  optimizer:
+    name: "adamw"
+    lr: 3.0e-5
+    weight_decay: 0.05
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 1
+  amp: true
+  amp_dtype: "bf16"
+  grad_clip: 1.0
+  # AXIS FLIPPED: false -> true
+  loss_small_organ: true
+  loss_small_organ_cfg:
+    dice_weight: 1.0
+    tversky_weight: 1.0
+    focal_weight: 0.5
+    tversky_alpha: 0.3
+    tversky_beta: 0.7
+    focal_gamma: 1.5
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.25
+  flow_weight: 0.5
+  deepsup_weight: 0.25
+  teacher_distill: 0.0
+  cross_modal_infonce: 0.0
+  flow_shape_prior: 0.0
+  cascade_consistency_kl: 0.0
+  cascade_consistency_dice: 0.0
+  boundary_ddpm: 0.0
+
+eval:
+  every_n_epochs: 1
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.02
+  max_peak_vram_gb: 23
+  warmstart_missing_key_frac: 0.05

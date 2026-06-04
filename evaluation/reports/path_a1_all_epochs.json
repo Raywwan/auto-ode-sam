@@ -1,0 +1,197 @@
+{
+  "smoke_max_volumes": 2,
+  "rows": [
+    {
+      "ckpt": "path_a1_big_solid_epoch001.pt",
+      "epoch_field": 1,
+      "per_organ_dsc": {
+        "spleen": 0.15945850710692144,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.7872506848721681
+      },
+      "mean_dsc": 0.23667729799477238,
+      "tag": "a1_001"
+    },
+    {
+      "ckpt": "path_a1_big_solid_v2hp_epoch001.pt",
+      "epoch_field": 1,
+      "per_organ_dsc": {
+        "spleen": 0.20613197367505848,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.6952552927200646
+      },
+      "mean_dsc": 0.22534681659878075,
+      "tag": "v2hp_001"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch002.pt",
+      "epoch_field": 2,
+      "per_organ_dsc": {
+        "spleen": 0.3267307245731569,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.4589770890358802
+      },
+      "mean_dsc": 0.19642695340225927,
+      "tag": "a1_002"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch004.pt",
+      "epoch_field": 4,
+      "per_organ_dsc": {
+        "spleen": 0.046903120645464785,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.6107068096751211
+      },
+      "mean_dsc": 0.16440248258014648,
+      "tag": "a1_004"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch007.pt",
+      "epoch_field": 7,
+      "per_organ_dsc": {
+        "spleen": 0.048690617699688445,
+        "r_kidney": 0.005713197517219191,
+        "l_kidney": 0.00505199861994184,
+        "liver": 0.5725337385284696
+      },
+      "mean_dsc": 0.15799738809132977,
+      "tag": "a1_007"
+    },
+    {
+      "ckpt": "path_a1_big_solid_v2hp_epoch004.pt",
+      "epoch_field": 4,
+      "per_organ_dsc": {
+        "spleen": 0.03747705720715873,
+        "r_kidney": 0.0,
+        "l_kidney": 0.004495887075041976,
+        "liver": 0.5861758468266771
+      },
+      "mean_dsc": 0.15703719777721944,
+      "tag": "v2hp_004"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch003.pt",
+      "epoch_field": 3,
+      "per_organ_dsc": {
+        "spleen": 0.028942074797816002,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.5973059802823288
+      },
+      "mean_dsc": 0.1565620137700362,
+      "tag": "a1_003"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch013.pt",
+      "epoch_field": 13,
+      "per_organ_dsc": {
+        "spleen": 0.005236315321555755,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0003713422785562212,
+        "liver": 0.5616744135573359
+      },
+      "mean_dsc": 0.14182051778936197,
+      "tag": "a1_013"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch012.pt",
+      "epoch_field": 12,
+      "per_organ_dsc": {
+        "spleen": 0.008768192592266294,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0004459308807134894,
+        "liver": 0.5423491904126516
+      },
+      "mean_dsc": 0.13789082847140785,
+      "tag": "a1_012"
+    },
+    {
+      "ckpt": "path_a1_big_solid_v2hp_epoch002.pt",
+      "epoch_field": 2,
+      "per_organ_dsc": {
+        "spleen": 0.025906479489296284,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.5181253050818797
+      },
+      "mean_dsc": 0.136007946142794,
+      "tag": "v2hp_002"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch008.pt",
+      "epoch_field": 8,
+      "per_organ_dsc": {
+        "spleen": 0.013120661843199134,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0006936358907028018,
+        "liver": 0.5190112321454694
+      },
+      "mean_dsc": 0.13320638246984284,
+      "tag": "a1_008"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch010.pt",
+      "epoch_field": 10,
+      "per_organ_dsc": {
+        "spleen": 0.02140662787797948,
+        "r_kidney": 0.0,
+        "l_kidney": 0.001733402669440111,
+        "liver": 0.5083525719500432
+      },
+      "mean_dsc": 0.13287315062436572,
+      "tag": "a1_010"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch011.pt",
+      "epoch_field": 11,
+      "per_organ_dsc": {
+        "spleen": 0.010579402763712883,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0001984569968494952,
+        "liver": 0.5018880602307952
+      },
+      "mean_dsc": 0.1281664799978394,
+      "tag": "a1_011"
+    },
+    {
+      "ckpt": "path_a1_big_solid_epoch009.pt",
+      "epoch_field": 9,
+      "per_organ_dsc": {
+        "spleen": 0.027692715743181447,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0013589978008944677,
+        "liver": 0.48097351493130375
+      },
+      "mean_dsc": 0.12750630711884492,
+      "tag": "a1_009"
+    },
+    {
+      "ckpt": "path_a1_big_solid_v2hp_epoch003.pt",
+      "epoch_field": 3,
+      "per_organ_dsc": {
+        "spleen": 0.0028877366046962606,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.48397207142769827
+      },
+      "mean_dsc": 0.12171495200809863,
+      "tag": "v2hp_003"
+    },
+    {
+      "ckpt": "path_a1_big_solid_v2hp_epoch005.pt",
+      "epoch_field": 5,
+      "per_organ_dsc": {
+        "spleen": 0.0006325977627125792,
+        "r_kidney": 0.0,
+        "l_kidney": 0.0,
+        "liver": 0.4465382708002015
+      },
+      "mean_dsc": 0.11179271714072851,
+      "tag": "v2hp_005"
+    }
+  ]
+}

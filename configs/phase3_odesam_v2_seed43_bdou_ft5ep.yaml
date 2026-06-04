@@ -1,0 +1,148 @@
+# =============================================================================
+# phase3_odesam_v2_seed43_bdou_ft5ep.yaml
+#
+# Item #5 of the A0 Combined Plan (2026-05-22):
+#   Decoder-only fine-tune of the V2 seed=43 best checkpoint
+#   (DSC 0.9358, HD95 0.559 mm, NSD 0.96775 at ep15) with an added
+#   Boundary-DoU loss (Sun et al., MICCAI 2023; arXiv:2308.00220).
+#
+# Hyperparameters (locked after numerical verification against paper Fig 2):
+#   - w_boundary_dou = 0.1   (contribution-parity vs Dice at V2 convergence:
+#                              0.1 * 0.43 ≈ 0.5 * 0.07; would dominate at 0.3)
+#   - alpha_max      = 0.8   (paper default; matches Fig 2 reference values)
+#   - lr             = 1e-5  (10× lower than V2 base; decoder-only fine-tune)
+#   - epochs         = 5     (~10 GPU-h at 145 min/val-epoch with val_every=2)
+#   - encoder_freeze_epochs = 999  (decoder-only — encoder never unfreezes)
+#   - resume_weights_only   = true (fresh optimizer/scheduler/scaler)
+#
+# Revert criteria (any one triggers checkpoint revert + writeup omission):
+#   - mean DSC drop  > 0.005
+#   - mean HD95 rise > 0.5 mm
+#   - mean NSD drop  > 0.005
+# i.e. all three metrics must improve or stay within noise (anti-Pareto
+# discipline per feedback_metric_axis_blindness_2026-05-22.md).
+# =============================================================================
+
+experiment:
+  name: "phase3_odesam_v2_seed43_bdou_ft5ep"
+  seed: 43
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2
+
+  ode:
+    ode_hidden: 64
+    n_freqs: 4
+    substeps: 2
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  prompt_encoder:
+    num_modalities: 11
+    modality_embed_dim: 64
+    content_embed_dim: 64
+    use_clip_text: false
+
+  mask_decoder:
+    num_multimask_outputs: 3
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [6]
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 5
+  batch_size: 4
+  grad_accumulation_steps: 4
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-5
+  lr_min: 1.0e-7
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 0
+  warmup_lr_init: 1.0e-7
+  grad_clip: 1.0
+
+  # Decoder-only fine-tune: encoder stays frozen for all 5 epochs
+  encoder_freeze_epochs: 999
+
+  # Match V2 training augmentation stack (do NOT flip — V2 wasn't flip-trained)
+  all_slice_supervision: true
+  cutmix_prob: 0.5
+
+  loss:
+    w_dice:           0.5
+    w_focal:          0.0
+    w_cldice:         0.2
+    w_iou:            0.1
+    w_boundary:       0.0
+    w_dice_topk:      0.5
+    w_boundary_dou:   0.1
+    boundary_dou_alpha_max: 0.8
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 1
+  keep_top_k: 5
+  monitor_metric: "val_dice"
+  resume_from: "C:/Users/Raywa/Desktop/VoluFormer3D_V4/checkpoints/phase3_odesam_v2_seed43_40ep/phase3_odesam_v2_seed43_40ep_best.pt"
+  resume_weights_only: true
+
+validation:
+  val_every_n_epochs: 2
+  vis_every_n_epochs: 5
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

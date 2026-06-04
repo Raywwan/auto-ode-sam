@@ -25,10 +25,14 @@ def test_forward_shape():
     images = torch.randn(1, 4, 3, 256, 256)  # (B, D, C, H, W) with D=4 for speed
     organ_id = torch.tensor([6])
     out = m(images, organ_id, is_3d=True)
-    assert out["masks"].shape == (1, 15, 64, 64)
+    # V5: decoder outputs 128×128 (three-stage upsample).
+    assert out["masks"].shape == (1, 15, 128, 128)
     assert out["iou_pred"].shape == (1, 15)
-    assert out["deepsup_logits"].shape[:2] == (1, 15)
-    assert out["flow_targets"] is not None
+    # V5: all-slice deepsup (N=5 slices) — shape (B, N, K, h, w).
+    ds = out["deepsup_logits"]
+    assert ds.dim() == 5 and ds.shape[0] == 1 and ds.shape[2] == 15
+    assert "flow_targets" in out and out["flow_targets"] is not None
+    assert "xsc_pairs" in out["flow_targets"]
 
 
 def test_flow_targets_none_in_eval():

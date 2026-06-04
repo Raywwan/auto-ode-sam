@@ -45,12 +45,20 @@ def get_dataset(cfg, split: str = "train", copypaste_prob: float = 0.0) -> Medic
             copypaste_prob=copypaste_prob,
         )
     elif dataset_name == "amos22_multiorgan":
+        aug_flag = getattr(cfg.data, "augment", None)
+        if aug_flag is not None and split != "train":
+            aug_flag = False  # safeguard: never augment val/test
+        slabs_per_volume = int(getattr(cfg.data, "slabs_per_volume", 1))
+        light_aug = bool(getattr(cfg.data, "light_aug", False))
         return AMOS22MultiOrgan3D_Dataset(
             data_root=cfg.data.data_root,
             split=split,
             img_size=getattr(cfg.data, "img_size", 256),
             depth=getattr(cfg.data, "slices_per_volume", 8),
             modality=modality,
+            augment=aug_flag,
+            slabs_per_volume=slabs_per_volume,
+            light_aug=light_aug,
         )
     else:
         raise ValueError(

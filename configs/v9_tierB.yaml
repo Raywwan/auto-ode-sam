@@ -27,6 +27,10 @@ model:
     # MONAI SSL SwinViT (BTCV/AMOS-class, 5050-vol CT pretrain). 392 MB.
     # Fetched once via: scripts/fetch_pretrained.py (idempotent).
     pretrained_weights: "checkpoints/pretrained/model_swinvit.pt"
+    # Phase C: deep supervision (decoder taps). Requires
+    # training.deep_sup_weight_{start,end} > 0 for the aux loss to fire.
+    deep_supervision: false
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
 
   skip_channels: 128
   skip_fine_channels: 64
@@ -65,6 +69,10 @@ data:
   neg_frac: 0.3
   mix_frac: 0.2
   slabs_per_volume: 4
+  # Phase C: copy-paste small-organ augmentation. Bank cached once via
+  # `python -m datasets.copy_paste_bank`. Probability per-sample; 0 disables.
+  copy_paste_prob: 0.0
+  copy_paste_cache: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22/copy_paste_bank.pt"
 
 training:
   stage: 1
@@ -80,6 +88,20 @@ training:
     warmup_epochs: 2
   amp: true
   grad_clip: 1.0
+  # Phase C: Stage-1 weighted loss for weak organs. Off by default.
+  loss_small_organ: false
+  loss_small_organ_cfg:
+    dice_weight: 1.0
+    tversky_weight: 1.0
+    focal_weight: 0.5
+    tversky_alpha: 0.3
+    tversky_beta: 0.7
+    focal_gamma: 1.5
+  # Phase C: Stage-1 deep supervision on proposer decoder taps. Linear decay
+  # from start->end over epochs. Both 0.0 disables. Requires
+  # model.proposer.deep_supervision=true.
+  deep_sup_weight_start: 0.0
+  deep_sup_weight_end: 0.0
 
 loss:
   dice_weight: 1.0

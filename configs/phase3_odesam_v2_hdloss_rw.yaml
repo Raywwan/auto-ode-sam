@@ -1,0 +1,162 @@
+# =============================================================================
+# phase3_odesam_v2_hdloss_rw.yaml — V2 bundled retrain
+#
+# DELTA vs canonical phase3_odesam_v2.yaml (one-axis-at-a-time was relaxed
+# to bundle TWO low-risk improvements because they target ORTHOGONAL failure
+# modes — boundary error vs. contrast sensitivity):
+#
+#   1. HD-loss (Karimi & Salcudean, IEEE TMI 2020):
+#        - +w_hd_loss: 0.1 (small to start — pure addition, all other weights
+#          unchanged so we keep canonical dynamics)
+#        - hd_loss_alpha: 2.0 (the paper's recommended value)
+#        - Ramped in over 3 epochs starting at epoch 3 (the trainer's
+#          compute_all path applies HD-loss unconditionally; the ramp lives
+#          in forward(). For this run we use compute_all so the loss is
+#          active from epoch 0. This is acceptable because the SAM-2 prior
+#          gives a coarse-shape estimate from the first batch.)
+#        - Target: closes the 0.034 DSC gap to nnUNet by lifting boundary
+#          fidelity (NSD@1mm is the binding metric)
+#
+#   2. RandomWindowing (Eilertsen et al., MIDL 2025):
+#        - random_windowing_prob: 0.5  (50% of training samples see jittered HU window)
+#        - Center jitter: ±10%; Width jitter: ±15%
+#        - Target: closes the contrast-sensitivity hole (DSC drops to 0.898
+#          at gamma=0.70 in the robustness battery). Same (lo, hi) is applied
+#          to all D slices so cross-slice intensity coherence is preserved.
+#
+# EVERYTHING ELSE IS IDENTICAL TO CANONICAL V2 — so any DSC change vs
+# the canonical 0.9351 is attributable to the bundled change, not to a
+# hyperparameter drift.
+#
+# Expected (literature-grounded):
+#   - +0.003-0.008 DSC, +0.005-0.015 NSD@1mm headline gain
+#   - +0.005-0.015 DSC under contrast perturbation (gamma=0.70)
+#   - No regression on baseline robustness (noise sigma, larger gammas)
+#
+# Risk: HD-loss + cldice combined may over-pull the boundary; if val DSC
+# drops > 0.02 by epoch 7 (V2's best.pt epoch), abort under V8+ stop-rule.
+# =============================================================================
+
+experiment:
+  name: "phase3_odesam_v2_hdloss_rw_256px_liver"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2          # Taps Stage 2 (16×16) + Stage 1 (32×32) for skip
+
+  ode:
+    ode_hidden: 64
+    n_freqs: 4
+    substeps: 2
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  prompt_encoder:
+    num_modalities: 11
+    modality_embed_dim: 64
+    content_embed_dim: 64
+    use_clip_text: false
+
+  mask_decoder:
+    num_multimask_outputs: 3
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [6]
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 21
+  batch_size: 4
+  grad_accumulation_steps: 4
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 2
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  all_slice_supervision: true
+  cutmix_prob: 0.5
+
+  # ---- NEW vs canonical: RandomWindowing for HU window jitter ----
+  # Dataset reads this and jitters (lo, hi) per-sample during training.
+  random_windowing_prob: 0.5
+
+  loss:
+    w_dice:        0.5
+    w_focal:       0.0
+    w_cldice:      0.2
+    w_iou:         0.1
+    w_boundary:    0.0
+    w_dice_topk:   0.5
+    # ---- NEW vs canonical: HD-loss (Karimi-Salcudean 2020) ----
+    w_hd_loss:     0.1
+    hd_loss_alpha: 2.0
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 5
+  keep_top_k: 2
+  monitor_metric: "val_dice"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 5
+  vis_every_n_epochs: 10
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

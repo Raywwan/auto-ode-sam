@@ -86,6 +86,39 @@ class FlowMatchedOrganConditionedODE(nn.Module):
             "target": torch.stack(targets, dim=1),
         }
 
+    def _consistency_pairs(self, func, x, D, organ_id, direction: str) -> Dict[str, torch.Tensor]:
+        """Cross-Slice ODE Consistency (XSC) — novel contribution.
+
+        Integrates one inter-slice interval with Heun, so (h_i → h_{i+1}^pred).
+        Target is the stop-grad encoder feature at the adjacent slice. This closes
+        the flow-matching training loop: flow-matching supervises the velocity,
+        XSC supervises the integrated path, teaching the ODE to reconstruct
+        adjacent-slice features from one step of its own dynamics.
+        """
+        t_pts = [d / max(D - 1, 1) for d in range(D)]
+        preds, targets = [], []
+        if direction == "fwd":
+            idxs = range(D - 1)
+            step = +1
+        else:
+            idxs = range(D - 1, 0, -1)
+            step = -1
+        for i in idxs:
+            t0, t1 = t_pts[i], t_pts[i + step]
+            dt = (t1 - t0) / self.substeps
+            h = x[:, i]
+            for j in range(self.substeps):
+                tc = t0 + j * dt
+                k1 = func(h, tc, organ_id)
+                k2 = func(h + dt * k1, tc + dt, organ_id)
+                h = h + 0.5 * dt * (k1 + k2)
+            preds.append(h)
+            targets.append(x[:, i + step].detach())
+        return {
+            "pred": torch.stack(preds, dim=1),
+            "target": torch.stack(targets, dim=1),
+        }
+
     def forward(
         self,
         features: torch.Tensor,       # (B, D, C, H, W)
@@ -109,8 +142,14 @@ class FlowMatchedOrganConditionedODE(nn.Module):
 
         flow_targets: Optional[Dict[str, Dict[str, torch.Tensor]]] = None
         if return_flow_targets:
+            fwd_cons = self._consistency_pairs(self.ode_fwd, x, D, organ_id, "fwd")
+            bwd_cons = self._consistency_pairs(self.ode_bwd, x, D, organ_id, "bwd")
             flow_targets = {
                 "fwd_pairs": self._flow_pairs(self.ode_fwd, x, D, organ_id, "fwd"),
                 "bwd_pairs": self._flow_pairs(self.ode_bwd, x, D, organ_id, "bwd"),
+                "xsc_pairs": {
+                    "pred": torch.cat([fwd_cons["pred"], bwd_cons["pred"]], dim=1),
+                    "target": torch.cat([fwd_cons["target"], bwd_cons["target"]], dim=1),
+                },
             }
         return out, flow_targets

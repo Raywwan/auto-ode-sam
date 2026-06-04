@@ -1,19 +1,118 @@
-checkpoints/
-logs/
+# =============================================================================
+# Auto-ODE-SAM — .gitignore
+# Keeps the repo lean: large weights, datasets, and intermediate artifacts
+# live outside git (see checkpoints/README.md and the dataset section in
+# README.md for how to download / regenerate them).
+# =============================================================================
+
+# ---- Python ---------------------------------------------------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---- Environments ---------------------------------------------------------
 .venv/
+venv/
+env/
+.env
+.env.*
+
+# ---- Editors / OS ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- ML weights & checkpoints --------------------------------------------
+# All trained weights are hosted externally (see checkpoints/README.md).
+# Keep the checkpoints/ directory in the repo *only* for its README.
+checkpoints/**
+!checkpoints/README.md
+
+# Also catch loose checkpoint files anywhere in the tree.
 *.pt
 *.pth
 *.ckpt
+*.safetensors
+
+# ---- Bulk array / image data --------------------------------------------
 *.npy
 *.npz
 *.h5
 *.hdf5
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+
+# Per-volume prediction NIfTI dumps under thesis/results/*/predictions/.
+# The cited per_volume_metrics.csv / summary.json next to them are tiny
+# and stay versioned.
+**/predictions/
+
+# ---- Training run output -------------------------------------------------
+logs/
+runs/
 wandb/
-.DS_Store
-Thumbs.db
-checkpoints/pretrained/
+mlruns/
+tb_logs/
+
+# ---- nnUNet workspace (27 GB of preprocessed data + raw + results) ------
+# Reproduced by running scripts/nnunet/*.sh against the AMOS22 download.
+nnUNet_workspace/
+
+# ---- LaTeX intermediates -------------------------------------------------
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+
+# Keep the compiled main thesis PDF tracked, ignore other build PDFs.
+thesis/abstract.pdf
+thesis/extended_abstract.pdf
+thesis/supervisor_summary.pdf
+thesis/**/*.aux
+thesis/**/*.log
+thesis/**/*.out
+
+# ---- Frozen V3 tree (kept locally for rollback, not for GitHub) ---------
+# legacy_v3/ contains the historical V3 codebase plus the canonical seed=42
+# checkpoint. The weights are republished via checkpoints/README.md;
+# the code is preserved in git history. The tree itself is 13.5 GB.
+legacy_v3/
+
+# ---- Misc scratch --------------------------------------------------------
+*.bak
+*.bak_*
+*.tmp
+*.orig
+_preflight_tmp/
+.cache/
+
+# ---- Private / supervisor-facing materials (local-only) ------------------
+# Thesis chapter PDFs, supervisor handoffs, internal planning notes, and the
+# full thesis manuscript tree are kept out of the repo even when it is
+# private — they contain personal / embargoed content and rapidly-changing
+# notes that don't belong in history.
+Dr_Aram/
+docs/internal/
+thesis/

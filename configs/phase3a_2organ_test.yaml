@@ -1,0 +1,151 @@
+# =============================================================================
+# phase3a_2organ_test.yaml — 2-organ smoke test before full Phase 3a v3 run
+#
+# PURPOSE:
+#   Validate the full Auto-ODE-SAM V3 pipeline (post arch fixes) on 2 easy organs
+#   before committing to a 3-4 day full 15-organ training run.
+#
+# ORGANS: Spleen (1) + Liver (6)
+#   - Both large and well-defined — fastest to converge
+#   - Liver: baseline DSC ~0.89 from prior phases — we know what healthy looks like
+#   - Spleen: convex, clean boundaries
+#
+# MODEL: Identical architecture to phase3a_autoodesam_256px.yaml
+#   - n_organs=15 kept — same model, same organ query tokens
+#   - Only target_organs restricted — no remapping needed
+#
+# EXPECTED CONVERGENCE (if architecture is correct):
+#   ep2  val_dice > 0.05   (model is learning)
+#   ep5  val_dice > 0.30   (liver/spleen taking shape)
+#   ep10 val_dice > 0.60   (solid convergence)
+#   ep15 val_dice > 0.75   (pass → start full 15-organ run)
+#
+# RUN:
+#   cd C:\Users\Raywa\Desktop\VoluFormer3D
+#   C:\Users\Raywa\Desktop\LiteSAM3D\.venv\Scripts\python train.py \
+#       --config configs/phase3a_2organ_test.yaml
+# =============================================================================
+
+experiment:
+  name: "phase3a_2organ_test"
+  seed: 42
+  output_dir: "checkpoints"
+  log_dir: "logs"
+
+model:
+  architecture: "auto_ode_sam"
+  encoder_name: "tiny_vit_21m_224"
+  encoder_pretrained: true
+  encoder_freeze_backbone: false
+  img_size: 256
+  embed_dim: 256
+
+  multiscale_isa:
+    stage_index: 2
+
+  ode:
+    ode_hidden: 128
+    n_freqs: 6
+    substeps: 4
+    n_organs: 15        # Keep 15 — identical architecture to full run
+    organ_emb_dim: 64
+
+  pfesa:
+    alpha: 1.0
+    highfreq_cutoff: 0.5
+
+  isa:
+    enabled: false
+
+  organ_query_decoder:
+    n_organs: 15        # Keep 15 — same decoder as full run
+    n_heads: 8
+    n_layers: 2
+    diversity_loss_weight: 0.01
+
+  organ_decoder:
+    transformer_depth: 2
+    transformer_mlp_dim: 2048
+    iou_head_depth: 3
+    iou_head_hidden_dim: 256
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 1
+  target_organs: [1, 6]   # Spleen + Liver only
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  normalize: true
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+training:
+  epochs: 15
+  batch_size: 4
+  grad_accumulation_steps: 4
+  num_workers: 4
+  pin_memory: true
+  mixed_precision: true
+  optimizer: "adamw"
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  scheduler: "cosine_warmup"
+  warmup_epochs: 3
+  warmup_lr_init: 1.0e-6
+  grad_clip: 1.0
+
+  all_slice_supervision: true
+  cutmix_prob: 0.5
+  copypaste_prob: 0.1
+  foreground_oversampling: true
+  boundary_ramp_epoch: 999    # Disable boundary loss — not needed for 15-epoch smoke test
+
+  loss:
+    w_dice:         0.5
+    w_focal:        0.0
+    w_cldice:       0.0
+    w_iou:          0.1
+    w_boundary:     0.1
+    w_dice_topk:    0.5
+    w_deepsup:      0.1
+    focal_alpha:    0.25
+    focal_gamma:    2.0
+    cldice_iterations: 3
+
+checkpoint:
+  save_every_n_epochs: 5
+  keep_top_k: 2
+  monitor_metric: "val/dice_3d"
+  resume_from: null
+
+validation:
+  val_every_n_epochs: 2     # Validate frequently — want early signal
+  vis_every_n_epochs: 5
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0
+  stratify_by: "patient"
+
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  wandb_project: "voluformer3d"
+  wandb_entity: null
+  log_every_n_steps: 50
+  log_images: true

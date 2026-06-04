@@ -9,7 +9,7 @@ one-forward-pass.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import nibabel as nib
 import numpy as np
@@ -28,6 +28,9 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
         depth: int = 8,
         modality: str = "ct",
         hu_clip: tuple = (-200, 250),
+        augment: Optional[bool] = None,
+        slabs_per_volume: int = 1,
+        light_aug: bool = False,
     ) -> None:
         self.root = Path(data_root)
         self.split = split
@@ -35,6 +38,12 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
         self.depth = depth
         self.modality = modality
         self.hu_clip = hu_clip
+        self.augment = (split == "train") if augment is None else augment
+        # V7: multi-slab sampling — K distinct Z-offsets per volume per epoch.
+        # Only active on train split; val/test always use 1 center slab.
+        self.slabs_per_volume = int(slabs_per_volume) if split == "train" else 1
+        # V7: light_aug = H-flip + intensity only (no elastic/gamma/noise).
+        self.light_aug = bool(light_aug)
         self.samples: List[Dict] = self._build_index()
 
     def _build_index(self) -> List[Dict]:
@@ -73,7 +82,7 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
         return out
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.samples) * self.slabs_per_volume
 
     def _normalize_image(self, x: np.ndarray) -> np.ndarray:
         lo, hi = self.hu_clip
@@ -88,8 +97,73 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
         zw = self.img_size / w
         return zoom(arr, (zh, zw), order=order)
 
+    def _augment(self, img: np.ndarray, lbl: np.ndarray) -> tuple:
+        """Paired image + label augmentation (nnU-Net-inspired recipe).
+
+        img: (H, W, D) float HU, lbl: (H, W, D) uint8 — both already at self.img_size.
+        Augmentations: H-flip, small rotation, elastic deformation, gamma,
+        Gaussian noise, intensity jitter. NO 90° rotation (collapses OAP priors).
+        """
+        # H-flip (axis=1)
+        if np.random.rand() < 0.5:
+            img = img[:, ::-1, :].copy()
+            lbl = lbl[:, ::-1, :].copy()
+
+        # Small random rotation ±15° — skipped in light_aug mode (V7).
+        if (not self.light_aug) and np.random.rand() < 0.5:
+            from scipy.ndimage import rotate
+            angle = float(np.random.uniform(-15.0, 15.0))
+            img = rotate(img, angle=angle, axes=(0, 1), reshape=False, order=1, mode="nearest")
+            lbl = rotate(lbl, angle=angle, axes=(0, 1), reshape=False, order=0, mode="nearest")
+
+        # Elastic deformation — skipped in light_aug mode.
+        if (not self.light_aug) and np.random.rand() < 0.3:
+            from scipy.ndimage import gaussian_filter, map_coordinates
+            H, W, D = img.shape
+            alpha = float(np.random.uniform(60.0, 120.0))
+            sigma = float(np.random.uniform(8.0, 14.0))
+            dx = gaussian_filter(np.random.rand(H, W) * 2 - 1, sigma) * alpha
+            dy = gaussian_filter(np.random.rand(H, W) * 2 - 1, sigma) * alpha
+            yy, xx = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+            y_map = (yy + dy).astype(np.float32)
+            x_map = (xx + dx).astype(np.float32)
+            img_out = np.empty_like(img)
+            lbl_out = np.empty_like(lbl)
+            for d in range(D):
+                img_out[..., d] = map_coordinates(img[..., d], [y_map, x_map], order=1, mode="nearest")
+                lbl_out[..., d] = map_coordinates(lbl[..., d], [y_map, x_map], order=0, mode="nearest")
+            img, lbl = img_out, lbl_out
+
+        # Intensity jitter on HU window
+        if np.random.rand() < 0.7:
+            lo, hi = self.hu_clip
+            rng = hi - lo
+            img = img * float(np.random.uniform(0.85, 1.15)) + float(np.random.uniform(-0.08, 0.08)) * rng
+            img = np.clip(img, lo, hi).astype(np.float32)
+
+        # Gamma correction — skipped in light_aug mode.
+        if (not self.light_aug) and np.random.rand() < 0.3:
+            lo, hi = self.hu_clip
+            norm = (img - lo) / max(hi - lo, 1)
+            norm = np.clip(norm, 1e-6, 1.0)
+            gamma = float(np.random.uniform(0.7, 1.5))
+            norm = norm ** gamma
+            img = (norm * (hi - lo) + lo).astype(np.float32)
+
+        # Gaussian noise — skipped in light_aug mode.
+        if (not self.light_aug) and np.random.rand() < 0.2:
+            lo, hi = self.hu_clip
+            rng = hi - lo
+            img = img + np.random.normal(0.0, 0.01 * rng, img.shape).astype(np.float32)
+            img = np.clip(img, lo, hi).astype(np.float32)
+
+        return img, lbl
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        s = self.samples[idx]
+        n_vols = len(self.samples)
+        vol_idx = idx % n_vols
+        slab_idx = idx // n_vols                                 # 0..slabs_per_volume-1
+        s = self.samples[vol_idx]
         img_nib = nib.load(s["image_path"])
         lbl_nib = nib.load(s["label_path"])
         img_vol = np.asarray(img_nib.dataobj, dtype=np.float32)
@@ -106,8 +180,22 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
         if valid.size == 0:
             center = Z // 2
         else:
-            best = valid[np.argmax(counts_per_slice[valid])]
-            center = int(best)
+            # V7 multi-slab: pick the top-K slice centers (most organs present),
+            # then use slab_idx to select. Each slab gets a different high-ROI window.
+            K = max(self.slabs_per_volume, 1)
+            scored = counts_per_slice[valid]
+            # Use argpartition for top-K, tie-break randomly in train split.
+            top_k_within = np.argpartition(-scored, min(K, len(scored) - 1))[:K]
+            # Sort top-K by score descending for deterministic ordering.
+            top_k_within = top_k_within[np.argsort(-scored[top_k_within])]
+            centers = valid[top_k_within]
+            center = int(centers[min(slab_idx, len(centers) - 1)])
+
+        # --- Train-only augmentation: z-jitter the center slice (high-ROI) ---
+        if self.augment and valid.size > 0:
+            # ±3 slice jitter on Z, clipped to valid window; each epoch picks a different 8-slice stack.
+            shift = int(np.random.randint(-3, 4))
+            center = int(np.clip(center + shift, half, Z - half - 1))
 
         z0, z1 = center - half, center + half
         img_stack = img_vol[..., z0:z1]
@@ -115,6 +203,10 @@ class AMOS22MultiOrgan3D_Dataset(Dataset):
 
         img_resized = np.stack([self._resize_2d(img_stack[..., d], order=1) for d in range(self.depth)], axis=-1)
         lbl_resized = np.stack([self._resize_2d(lbl_stack[..., d], order=0) for d in range(self.depth)], axis=-1)
+
+        # --- Train-only augmentation: spatial + intensity (paired image+mask) ---
+        if self.augment:
+            img_resized, lbl_resized = self._augment(img_resized, lbl_resized)
 
         img_norm = self._normalize_image(img_resized)
         img_tensor = torch.from_numpy(img_norm).permute(2, 0, 1).unsqueeze(1)

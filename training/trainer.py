@@ -345,24 +345,45 @@ class Trainer:
         self.grad_accum_steps = cfg.training.grad_accumulation_steps
 
         # ---- Checkpoint ----
+        # monitor_metric comes from config so PA-CODE-style configs that gate on
+        # val_dice_3d (3D mini-eval) actually drive best.pt selection. Hardcoding
+        # 'val_dice' here was the A1 best-ckpt-overwrite bug (2026-04-30 audit).
+        ckpt_monitor = getattr(cfg.checkpoint, "monitor_metric", "val_dice")
+        ckpt_min_delta = float(getattr(cfg.checkpoint, "best_min_delta", 0.0))
         self.ckpt_manager = CheckpointManager(
             save_dir=str(self.exp_dir),
             keep_top_k=cfg.checkpoint.keep_top_k,
-            monitor_metric="val_dice",
+            monitor_metric=ckpt_monitor,
             experiment_name=cfg.experiment.name,
+            min_delta=ckpt_min_delta,
+        )
+        self.logger.info(
+            f"Checkpoint monitor metric: {ckpt_monitor} (best Δ-gate: {ckpt_min_delta})"
         )
 
         self.start_epoch = 0
         resume_path = cfg.checkpoint.resume_from
+        # When True, restore only model weights and start from epoch 0 with a
+        # fresh optimizer/scheduler/scaler — used for fine-tuning from a
+        # converged checkpoint with a new loss head or schedule.
+        resume_weights_only = bool(getattr(cfg.checkpoint, "resume_weights_only", False))
         if resume_path:
-            self.logger.info(f"Resuming from: {resume_path}")
-            self.start_epoch, prev_metrics = self.ckpt_manager.load(
-                resume_path, self.model, self.optimizer, self.scheduler,
-                self.scaler, self.device,
-            )
-            self.start_epoch += 1
-            self.logger.info(f"Resumed at epoch {self.start_epoch}")
-            self.logger.reinit_tensorboard(purge_step=self.start_epoch)
+            if resume_weights_only:
+                self.logger.info(f"Fine-tune init from (weights only): {resume_path}")
+                _, prev_metrics = self.ckpt_manager.load(
+                    resume_path, self.model, None, None, None, self.device,
+                )
+                self.start_epoch = 0
+                self.logger.info("Starting from epoch 0 with fresh optimizer/scheduler")
+            else:
+                self.logger.info(f"Resuming from: {resume_path}")
+                self.start_epoch, prev_metrics = self.ckpt_manager.load(
+                    resume_path, self.model, self.optimizer, self.scheduler,
+                    self.scaler, self.device,
+                )
+                self.start_epoch += 1
+                self.logger.info(f"Resumed at epoch {self.start_epoch}")
+                self.logger.reinit_tensorboard(purge_step=self.start_epoch)
 
         self.logger.setup_layout()
         self.global_step = 0
@@ -372,8 +393,37 @@ class Trainer:
         self.logger.info(f"Starting training for {self.cfg.training.epochs} epochs")
         best_dice = 0.0
 
+        # PA-CODE three-phase curriculum:
+        # P0 [0, encoder_freeze_epochs): encoder fully frozen
+        # P1 [encoder_freeze_epochs, encoder_lowlr_epochs): encoder unfrozen, low LR
+        # P2 [encoder_lowlr_epochs, end): full LR
+        encoder_freeze_epochs = int(getattr(self.cfg.training, "encoder_freeze_epochs", 0))
+        # Monitor: 3D mini-eval at end of each epoch (PA-CODE-grade) vs noisy 2D val_dice
+        use_val_dice_3d = bool(getattr(self.cfg.validation, "use_val_dice_3d", False))
+        val_dice_3d_n_vols = int(getattr(self.cfg.validation, "val_dice_3d_n_vols", 2))
+        if encoder_freeze_epochs > 0:
+            self.logger.info(
+                f"Curriculum: encoder frozen for first {encoder_freeze_epochs} epoch(s)"
+            )
+        if use_val_dice_3d:
+            self.logger.info(
+                f"Monitor metric: val_dice_3d ({val_dice_3d_n_vols} volumes per epoch)"
+            )
+
+        # If P0 starts on epoch 0 (or resume start), freeze encoder now.
+        if encoder_freeze_epochs > 0 and self.start_epoch < encoder_freeze_epochs:
+            self._set_encoder_frozen(True)
+
         for epoch in range(self.start_epoch, self.cfg.training.epochs):
             epoch_start = time.time()
+
+            # Curriculum unfreeze at the P0/P1 boundary
+            if encoder_freeze_epochs > 0 and epoch == encoder_freeze_epochs:
+                self.logger.info(
+                    f"Curriculum: unfreezing encoder at epoch {epoch} (P0 -> P1)"
+                )
+                self._set_encoder_frozen(False)
+
             current_lr = self.scheduler.step(epoch)
             self.logger.log({"train/lr": current_lr}, step=epoch)
 
@@ -382,7 +432,12 @@ class Trainer:
             is_last_epoch = epoch == self.cfg.training.epochs - 1
             if epoch % self.cfg.validation.val_every_n_epochs == 0 or is_last_epoch:
                 val_metrics = self._val_epoch(epoch)
-                current_dice = val_metrics.get("val_dice", 0.0)
+                if use_val_dice_3d:
+                    dice_3d = self._val_dice_3d(epoch, n_vols=val_dice_3d_n_vols)
+                    val_metrics["val_dice_3d"] = dice_3d
+                    current_dice = dice_3d
+                else:
+                    current_dice = val_metrics.get("val_dice", 0.0)
             else:
                 val_metrics = {}
                 current_dice = best_dice
@@ -399,22 +454,209 @@ class Trainer:
 
             if current_dice > best_dice:
                 best_dice = current_dice
-                self.logger.info(f"  New best Dice: {best_dice:.4f} at epoch {epoch}")
+                metric_label = "val_dice_3d" if use_val_dice_3d else "val_dice"
+                self.logger.info(
+                    f"  New best {metric_label}: {best_dice:.4f} at epoch {epoch}"
+                )
 
             elapsed = time.time() - epoch_start
+            log_dice_2d = val_metrics.get("val_dice", 0.0)
+            log_dice_3d = val_metrics.get("val_dice_3d", float("nan"))
+            gamma_str = self._gamma_drift_probe()
             self.logger.info(
                 f"Epoch {epoch:3d} | "
                 f"Loss: {train_metrics.get('train_loss', 0):.4f} | "
-                f"Val Dice: {val_metrics.get('val_dice', 0):.4f} | "
+                f"Val Dice 2D: {log_dice_2d:.4f} | "
+                f"Val Dice 3D: {log_dice_3d:.4f} | "
                 f"LR: {current_lr:.2e} | Time: {elapsed:.0f}s"
+                f"{gamma_str}"
             )
 
         self.logger.info(f"Training complete. Best Dice: {best_dice:.4f}")
         self.logger.finish()
 
+    # ------------------------------------------------------------------
+    def _set_encoder_frozen(self, frozen: bool) -> None:
+        """Freeze or unfreeze the FULL encoder (backbone + proj + neck) in-place.
+
+        Used by the PA-CODE three-phase curriculum. The earlier version only
+        toggled `encoder.backbone`, leaving `encoder.proj` and `encoder.neck`
+        under full LR — which silently defeated the V2-warmstart protection
+        (2026-04-30 audit Bug 2). We freeze the entire encoder, including:
+          - 27 BN modules in TinyViT (running stats locked via .eval())
+          - 4 BN2d modules in proj/neck (also locked via .eval())
+        BN .eval() is critical: even with requires_grad=False, BN running
+        stats keep updating in train() mode — that drift would alter the
+        encoder's effective output distribution during P0.
+        Tracked across re-entry: self._encoder_is_frozen so we can re-call
+        .eval() after every model.train() (e.g., post-val_dice_3d).
+        """
+        n = 0
+        for param in self.model.encoder.parameters():
+            param.requires_grad = (not frozen)
+            n += param.numel()
+        if frozen:
+            self.model.encoder.eval()
+        else:
+            self.model.encoder.train()
+        self._encoder_is_frozen = frozen
+        state = "FROZEN" if frozen else "UNFROZEN"
+        self.logger.info(f"Encoder (backbone+proj+neck) {state} ({n:,} params)")
+
+    def _reassert_encoder_freeze(self) -> None:
+        """Re-call encoder.eval() if currently frozen.
+
+        Must be invoked after every self.model.train() call while in P0,
+        otherwise BN running stats drift even though weights are locked.
+        """
+        if getattr(self, "_encoder_is_frozen", False):
+            self.model.encoder.eval()
+
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def _gamma_drift_probe(self) -> str:
+        """Probe per-organ FiLM gamma spread on the 4 AMOS target organs.
+        Returns ' | gamma σ=X.XXX |L-LK|=Y.YYY' or '' if PA-CODE not active.
+        Diagnostic for LR-overshoot watch (2026-05-01 audit).
+        """
+        try:
+            ode_mod = getattr(self.model, "ode", None)
+            ode_fwd = getattr(ode_mod, "ode_fwd", None) if ode_mod is not None else None
+            if ode_fwd is None or not hasattr(ode_fwd, "gamma_head"):
+                return ""
+            emb = ode_fwd.organ_embed.weight
+            ids = torch.tensor([6, 1, 2, 3], device=emb.device)  # liver, spleen, R-K, L-K
+            g = ode_fwd.gamma_head(emb[ids])  # (4, C)
+            sigma = g.std(dim=0).mean().item()
+            d_lk = (g[0] - g[3]).abs().mean().item()
+            return f" | γσ={sigma:.3f} |γ(L-LK)|={d_lk:.3f}"
+        except Exception:
+            return ""
+
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def _val_dice_3d(self, epoch: int, n_vols: int = 2) -> float:
+        """Cheap 3D mini-eval as monitor metric.
+
+        Reuses scripts/eval_a1_per_organ.py utilities to do organ-conditioned
+        sliding-window inference on `n_vols` validation volumes, computes the
+        mean per-organ DSC, and returns it. Used to track the actual gate
+        metric (3D volumetric DSC) instead of the noisy 2D slice metric.
+
+        Designed to add ~2-3 minutes per epoch on 4090 with n_vols=2.
+        Silently returns float('nan') if the eval utilities cannot import
+        (e.g., dataset path missing) so training is never blocked.
+        """
+        try:
+            import sys
+            from pathlib import Path
+            scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            import importlib
+            ea = importlib.import_module("eval_a1_per_organ")
+            from evaluation.metrics_3d import VolumetricMetrics
+            import numpy as np
+        except Exception as e:
+            self.logger.info(f"  [val_dice_3d] skipped (import error: {e})")
+            return float("nan")
+
+        try:
+            cfg = self.cfg
+            img_size = int(cfg.model.img_size)
+            depth = int(cfg.data.slices_per_volume)
+            n_organs_total = int(getattr(cfg.model.ode, "n_organs", 15))
+            hu_clip = tuple(cfg.data.clip_range)
+            target_organs = list(cfg.data.target_organs)
+
+            all_vols = ea.list_val_volumes(Path(cfg.data.data_root), cfg.data.modality)
+            vols = all_vols[:n_vols]
+            if not vols:
+                return float("nan")
+
+            self.model.eval()
+            vm = VolumetricMetrics()
+            for v in vols:
+                img_zhw, spacing_zhw = ea.load_volume_zhw(v["image"])
+                lbl_zhw, _ = ea.load_volume_zhw(v["label"])
+                lbl_zhw = lbl_zhw.astype(np.uint8)
+                Z, H, W = img_zhw.shape
+                img_norm = ea.normalize_hu(img_zhw, hu_clip)
+                img_resized = ea.resize_z_stack(img_norm, img_size, img_size)
+                for oid in target_organs:
+                    oname = ea.TARGET_ORGANS.get(oid, f"organ_{oid}")
+                    gt_native = (lbl_zhw == oid)
+                    if gt_native.sum() < 50:
+                        continue
+                    prob_resized = ea.sliding_predict_one_organ(
+                        model=self.model, img_resized=img_resized,
+                        organ_id_value=oid, n_organs_total=n_organs_total,
+                        depth=depth, img_size=img_size, device=self.device,
+                    )
+                    if (H, W) != (img_size, img_size):
+                        import torch.nn.functional as Fnn
+                        t = torch.from_numpy(prob_resized).unsqueeze(1)
+                        t = Fnn.interpolate(t, size=(H, W), mode="bilinear", align_corners=False)
+                        prob_native = t.squeeze(1).numpy()
+                    else:
+                        prob_native = prob_resized
+                    pred_bin = (prob_native > 0.5).astype(bool)
+                    vm.update(pred_vol=pred_bin, gt_vol=gt_native,
+                              spacing_mm=spacing_zhw, organ_id=oid, patient_id=v["stem"])
+            self.model.train()
+            self._reassert_encoder_freeze()
+
+            summary = vm.summary()
+            dscs = []
+            for oid in target_organs:
+                oname = ea.TARGET_ORGANS.get(oid, f"organ_{oid}")
+                if oname in summary:
+                    val = summary[oname].get("dsc_mean", float("nan"))
+                    if val == val:
+                        dscs.append(float(val))
+            mean_dsc = float(np.mean(dscs)) if dscs else float("nan")
+
+            overall = summary.get("overall", {}) if summary else {}
+            tb_keys = (
+                ("val/dice_3d",        "dsc_mean"),
+                ("val/hd95_3d_mm",     "hd95_mm_mean"),
+                ("val/nsd_3d_at_1mm",  "nsd_mean"),
+                ("val/iou_3d",         "iou_mean"),
+                ("val/assd_3d_mm",     "assd_mm_mean"),
+                ("val/sensitivity_3d", "sensitivity_mean"),
+                ("val/precision_3d",   "precision_mean"),
+                ("val/specificity_3d", "specificity_mean"),
+                ("val/vol_sim_3d",     "vol_sim_mean"),
+                ("val/nsd_3d_at_2mm",  "nsd_at_2.0mm_mean"),
+            )
+            tb_payload = {}
+            for tb_name, src_key in tb_keys:
+                v = overall.get(src_key, None)
+                if v is not None and v == v:
+                    tb_payload[tb_name] = float(v)
+            if tb_payload:
+                try:
+                    self.logger.log(tb_payload, step=epoch)
+                except Exception:
+                    pass
+            assd_str = (
+                f", ASSD = {overall.get('assd_mm_mean', float('nan')):.2f} mm"
+                if "assd_mm_mean" in overall else ""
+            )
+            self.logger.info(
+                f"  [val_dice_3d] {n_vols} vols, mean DSC = {mean_dsc:.4f}{assd_str}"
+            )
+            return mean_dsc
+        except Exception as e:
+            self.logger.info(f"  [val_dice_3d] failed: {e}")
+            self.model.train()
+            self._reassert_encoder_freeze()
+            return float("nan")
+
     def _train_epoch(self, epoch: int) -> Dict[str, float]:
         """One training epoch."""
         self.model.train()
+        self._reassert_encoder_freeze()
         total_loss = 0.0
         total_dice = 0.0
         total_grad_norm = 0.0
@@ -490,6 +732,10 @@ class Trainer:
                             lambda_flow=getattr(self.cfg.training, "lambda_flow", 0.5),
                             lambda_deepsup=getattr(self.cfg.training, "lambda_deepsup", 0.1),
                             lambda_anatomy=getattr(self.cfg.training, "lambda_anatomy", 0.01),
+                            lambda_xsc=getattr(self.cfg.training, "lambda_xsc", 0.25),
+                            lambda_ds_scale=getattr(self.cfg.training, "lambda_ds_scale", 0.4),
+                            lambda_focal=getattr(self.cfg.training, "lambda_focal", 0.3),
+                            lambda_boundary=getattr(self.cfg.training, "lambda_boundary", 0.2),
                         )
                     images_v4 = batch["image"].to(self.device)                  # (B, D, 1, H, W)
                     if images_v4.shape[2] == 1:
@@ -507,8 +753,11 @@ class Trainer:
                         present_mask=present_v4,
                         flow_targets=outputs.get("flow_targets"),
                         deepsup_logits=outputs.get("deepsup_logits"),
+                        deepsup_slice_indices=outputs.get("deepsup_slice_indices"),
+                        deepsup_center_slice=outputs.get("deepsup_center_slice"),
                         anatomy_adjacency=self.model.decoder.graph.adjacency,
                         anatomy_adjacency_init=getattr(self.model.decoder.graph, "_init_adjacency", None),
+                        ds_scale_logits=outputs.get("ds_scale_logits"),
                         lambda_flow_override=lf_now,
                     )
                     loss = out["loss"]
@@ -784,7 +1033,7 @@ class Trainer:
                     is_3d = is_3d[0].item()
 
                 if is_organflow:
-                    # ---- OrganFlowSAM2 (V4) validation path ----
+                    # ---- OrganFlowSAM2 (V4) validation path — modern all-organ soft Dice ----
                     images_v4 = images                                             # (B, D, 1, H, W)
                     if images_v4.shape[2] == 1:
                         images_v4 = images_v4.repeat(1, 1, 3, 1, 1)
@@ -795,20 +1044,33 @@ class Trainer:
                     with autocast("cuda", enabled=self.use_amp):
                         out = self.model(images_v4, organ_id_v4, is_3d=True)
 
-                    pm = out["masks"]                                              # (B, 15, h, w)
-                    idx = (organ_id_v4 - 1).long()
-                    H_v, W_v = pm.shape[-2:]
-                    best_masks = pm.gather(
-                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, H_v, W_v)
-                    ).squeeze(1)
-                    best_masks = torch.sigmoid(best_masks)
-
+                    pm_logits = out["masks"]                                       # (B, 15, h, w)
                     D_v4 = masks_v4.shape[2]
-                    gt_center = masks_v4[:, :, D_v4 // 2, :, :]                    # (B, 15, H, W)
+                    gt_center = masks_v4[:, :, D_v4 // 2, :, :].float()            # (B, 15, H, W)
                     Hg, Wg = gt_center.shape[-2:]
+                    # Upsample logits to GT resolution, then sigmoid (MONAI/nnU-Net convention).
+                    pm_logits_up = torch.nn.functional.interpolate(
+                        pm_logits.float(), size=(Hg, Wg), mode="bilinear", align_corners=False,
+                    )
+                    prob_all = torch.sigmoid(pm_logits_up)                         # (B, 15, H, W)
+
+                    # Per-volume all-present-organ soft Dice (threshold-free primary metric).
+                    eps = 1e-6
+                    inter = (prob_all * gt_center).flatten(2).sum(-1)              # (B, 15)
+                    denom = prob_all.flatten(2).sum(-1) + gt_center.flatten(2).sum(-1)  # (B, 15)
+                    dice_per = (2.0 * inter + eps) / (denom + eps)                 # (B, 15)
+                    pm_f = present_v4.float()                                      # (B, 15)
+                    per_vol = (dice_per * pm_f).sum(1) / pm_f.sum(1).clamp(min=1.0)  # (B,)
+                    val_metrics.add_soft_dice(per_vol.detach().cpu().tolist())
+
+                    # best_masks / masks kept for existing downstream logging at picked-organ res.
+                    idx = (organ_id_v4 - 1).long()
+                    best_masks = prob_all.gather(
+                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, Hg, Wg),
+                    ).squeeze(1)
                     masks = gt_center.gather(
-                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, Hg, Wg)
-                    ).squeeze(1).float()
+                        1, idx.view(-1, 1, 1, 1).expand(-1, 1, Hg, Wg),
+                    ).squeeze(1)
 
                 elif is_auto_ode:
                     # ---- AutoODESAM validation path ----
@@ -893,16 +1155,25 @@ class Trainer:
                     )
 
         summary = val_metrics.summary()
+        # V4 multi-organ path reports soft_dice as the primary val metric; fall back to
+        # binary dice for legacy paths where soft_dice wasn't accumulated.
+        primary_dice = summary.get("soft_dice_mean", 0.0)
+        if primary_dice == 0.0 and summary.get("dice_mean", 0.0) > 0.0:
+            primary_dice = summary["dice_mean"]
         metrics = {
             "val_loss": total_loss / max(n_batches, 1),
-            "val_dice": summary["dice_mean"],
+            "val_dice": primary_dice,
+            "val_dice_bin": summary["dice_mean"],
             "val_iou": summary["iou_mean"],
             "val_hd95": summary["hd95_mean"],
             "val_nsd": summary["nsd_mean"],
         }
         self.logger.log({
             "val/loss": metrics["val_loss"],
-            "val/dice": summary["dice_mean"],
+            "val/dice": primary_dice,
+            "val/dice_soft": summary.get("soft_dice_mean", 0.0),
+            "val/dice_soft_std": summary.get("soft_dice_std", 0.0),
+            "val/dice_binary": summary["dice_mean"],
             "val/dice_std": summary["dice_std"],
             "val/iou": summary["iou_mean"],
             "val/hd95": summary["hd95_mean"],

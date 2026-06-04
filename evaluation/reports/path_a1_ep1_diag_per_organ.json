@@ -1,0 +1,60 @@
+{
+  "checkpoint": "checkpoints\\path_a1_big_solid\\path_a1_big_solid_epoch001.pt",
+  "ckpt_epoch": 1,
+  "n_volumes": 10,
+  "threshold": 0.5,
+  "per_organ_dsc": {
+    "spleen": 0.27203356028998926,
+    "r_kidney": 0.021217199875644948,
+    "l_kidney": 0.0022407344687750924,
+    "liver": 0.7838107879712444
+  },
+  "per_organ_hd95_mm": {
+    "spleen": 161.36101712218237,
+    "r_kidney": 239.64917146198226,
+    "l_kidney": 238.48130599895967,
+    "liver": 97.08617581653927
+  },
+  "per_organ_nsd": {
+    "spleen": 0.04122043243918953,
+    "r_kidney": 0.011462916501479643,
+    "l_kidney": 0.0009414764352666602,
+    "liver": 0.29555668122158824
+  },
+  "per_organ_n_vols": {
+    "spleen": 10,
+    "r_kidney": 10,
+    "l_kidney": 10,
+    "liver": 10
+  },
+  "mean_dsc_K4": 0.26982557065141344,
+  "mean_hd95_mm_K4": 184.1444175999159,
+  "mean_nsd_K4": 0.08729537664938102,
+  "liver_dsc": 0.7838107879712444,
+  "gates": {
+    "ep_4_warmup": {
+      "mean_floor": 0.78,
+      "liver_floor": 0.85,
+      "mean_pass": false,
+      "liver_pass": false
+    },
+    "ep_8_mid": {
+      "mean_floor": 0.86,
+      "liver_floor": 0.92,
+      "mean_pass": false,
+      "liver_pass": false
+    },
+    "ep_12_late": {
+      "mean_floor": 0.9,
+      "liver_floor": 0.93,
+      "mean_pass": false,
+      "liver_pass": false
+    },
+    "ep_14_final": {
+      "mean_floor": 0.91,
+      "liver_floor": 0.94,
+      "mean_pass": false,
+      "liver_pass": false
+    }
+  }
+}

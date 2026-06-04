@@ -1,0 +1,103 @@
+# OrganMoE-3D Phase I — CONTINUATION fine-tune.
+# Resumes from organmoe_phase_i/last.pt (full proposer state incl. MoE experts,
+# router, presence head). Goals:
+#   1. Recover from cosine-LR plateau (last.pt was at LR ~0).
+#   2. Push GATE-I-targeted organs (prostate, esoph, gb, panc, duod, adrenals)
+#      that were still climbing at ep 10.
+#   3. Stack zero-cost gains: deep supervision, sharper focal, lighter aux
+#      losses to let segmentation gradient dominate.
+# Keeps OrganMoE design intact (no architecture change) for novelty preservation.
+
+experiment:
+  name: "organmoe_phase_i_continue"
+  seed: 42
+  output_dir: "checkpoints/organmoe_phase_i_continue"
+  log_dir: "logs/organmoe_phase_i_continue"
+
+model:
+  architecture: "voluformer_v9"
+  n_organs: 15
+  img_size: 320
+  embed_dim: 256
+  proposer:
+    patch_size: 96
+    feature_size: 96
+    use_v2: true
+    pretrained_weights: null
+    deep_supervision: true        # NEW: enable aux heads on decoder3/4/5
+    deep_sup_layers: ["decoder3", "decoder4", "decoder5"]
+    use_organmoe: true
+    moe_n_experts: 8
+    moe_rank: 16
+    moe_alpha: 16.0
+    moe_top_k: 2
+    lora_rank: 0
+  skip_channels: 128
+  skip_fine_channels: 64
+  encoder: { pretrained: true, lora_rank: 0 }
+  pfesa: {}
+  ode: { n_organs: 15, organ_emb_dim: 32, ode_hidden: 128, n_freqs: 6, substeps: 4 }
+  decoder: { n_organs: 15, transformer_depth: 6, transformer_mlp_dim: 3072 }
+  graph: { n_organs: 15 }
+  dynamic_pfesa: { enabled: false }
+  boundary_ddpm: { enabled: false }
+
+data:
+  dataset: "amos22_v9"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  img_size: 320
+  depth: 8
+  volume_patch: 96
+  hu_clip: [-200, 250]
+  pos_frac: 0.5
+  neg_frac: 0.3
+  mix_frac: 0.2
+  slabs_per_volume: 4
+  copy_paste_prob: 0.0
+  balanced_batch_sampler: true
+  rare_organs: [4, 7, 10, 11, 12, 13, 14, 15]
+
+training:
+  stage: 1
+  epochs: 30                       # was 10
+  batch_size: 2
+  num_workers: 2
+  optimizer: { name: "adamw", lr: 1.5e-5, weight_decay: 0.05 }   # half peak LR
+  scheduler: { name: "cosine", warmup_epochs: 2 }                # gentler warmup
+  amp: true
+  amp_dtype: "bf16"
+  grad_clip: 1.0
+  loss_organmoe: true
+  loss_organmoe_cfg:
+    presence_weight: 0.05          # was 0.1 — let seg gradient dominate
+    balance_weight: 0.005          # was 0.01 — allow router specialization
+    use_presence_weighted_dice: true
+    small_organ_kwargs:
+      dice_weight: 1.0
+      tversky_weight: 1.5          # was 1.0 — Tversky helps small organs
+      focal_weight: 0.75           # was 0.5  — boost focal
+      tversky_alpha: 0.3
+      tversky_beta: 0.7
+      focal_gamma: 2.0             # was 1.5 — sharper focus on hard pixels
+  deep_sup_weight_start: 0.5       # progressive deep-sup decay
+  deep_sup_weight_end: 0.1
+
+loss:
+  dice_weight: 1.0
+  tversky_weight: 1.0
+  xsc_weight: 0.0
+  flow_weight: 0.0
+  deepsup_weight: 0.0
+
+eval:
+  every_n_epochs: 1
+  patch_size: 96
+  stride: 48
+  tta: true
+  connected_component: true
+  report_per_organ: true
+
+safety:
+  abort_if_val_drops: 0.03
+  max_peak_vram_gb: 23
+  warmstart_missing_key_frac: 0.05

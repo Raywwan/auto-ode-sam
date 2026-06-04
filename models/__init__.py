@@ -37,6 +37,9 @@ def build_model(cfg: DictConfig):
     elif arch == "organflow_sam2":
         from models.organflow_sam2 import OrganFlowSAM2
         return OrganFlowSAM2(cfg)
+    elif arch == "organflow_sam2_v8":
+        from models.organflow_sam2_v8 import OrganFlowSAM2V8
+        return OrganFlowSAM2V8(cfg)
     elif arch == "litesam3d_v2":
         raise NotImplementedError(
             "litesam3d_v2 is not available in VoluFormer3D. "

@@ -1,0 +1,56 @@
+# =============================================================================
+# amos22.yaml — AMOS22 Multi-Organ Segmentation Config (VoluFormer3D)
+# =============================================================================
+
+defaults:
+  - base
+
+experiment:
+  name: "voluformer3d_amos22_ct"
+
+data:
+  dataset: "amos22_3d"
+  data_root: "C:/Users/Raywa/Desktop/LiteSAM3D/data/amos22"
+  modality: "ct"
+  num_classes: 15
+  target_organs: null               # null = all 15 organs
+  clip_range: [-175, 250]
+  target_spacing: [1.5, 1.5, 1.5]
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  slices_per_volume: 8
+  slice_overlap: 0.5
+  cache_rate: 0.0
+
+model:
+  isa:
+    enabled: true
+    depth: 2
+    num_heads: 8
+    window_size: 3
+    dropout: 0.1
+    use_depth_pe: true
+    use_relative_bias: true
+
+training:
+  loss:
+    w_dice:   0.5
+    w_focal:  0.5
+    w_cldice: 0.0
+    w_iou:    0.1
+  epochs: 100
+  batch_size: 8
+  grad_accumulation_steps: 2
+  num_workers: 4
+
+evaluation:
+  metric_space: "3d_volume"
+  report_spacing_mm: [1.5, 1.5, 1.5]
+  compute_hd95: true
+  compute_nsd: true
+
+cross_validation:
+  enabled: false
+  n_folds: 5
+  fold: 0

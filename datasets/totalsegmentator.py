@@ -51,6 +51,7 @@ class TotalSegmentatorDataset(Dataset):
         slabs_per_volume: int = 4,
         seed: int = 0,
         train_frac: float = 0.95,
+        cache_dir: str = None,
     ) -> None:
         self.root = Path(data_root)
         self.split = split
@@ -59,6 +60,7 @@ class TotalSegmentatorDataset(Dataset):
         self.slabs_per_volume = int(slabs_per_volume)
         self.n_organs = self.N_ORGANS
         self._seed = int(seed)
+        self._cache_dir = Path(cache_dir) if cache_dir else None
 
         manifest_path = self.root / "totalsegmentator_manifest.json"
         if not manifest_path.exists():
@@ -75,10 +77,20 @@ class TotalSegmentatorDataset(Dataset):
         self.length = len(self.volume_ids) * self.slabs_per_volume
 
     def _load_volume(self, vol_id: str) -> Tuple[np.ndarray, np.ndarray]:
-        """Returns (image, label) as (D, H, W) float32 / int64."""
+        """Returns (normalized_image, label) as (D, H, W) float32 / int64.
+
+        Cache hit: dequantize fp16 from `<cache_dir>/<vol_id>.pt`.
+        Cache miss: load raw nii.gz, remap labels, normalize.
+        """
+        if self._cache_dir is not None:
+            cache_path = self._cache_dir / f"{vol_id}.pt"
+            if cache_path.exists():
+                data = torch.load(str(cache_path), weights_only=True)
+                ct = data["volume"].to(torch.float32).numpy()
+                label = data["label"].to(torch.int64).numpy()
+                return ct, label
         import nibabel as nib
         ct = nib.load(str(self._base / vol_id / "ct.nii.gz")).get_fdata().astype(np.float32)
-        # Build a single label volume by summing per-class masks (the latest mask wins).
         seg_dir = self._base / vol_id / "segmentations"
         label = np.zeros_like(ct, dtype=np.int64)
         for ts_name, amos_id in _TS_FILENAME_TO_AMOS.items():
@@ -87,20 +99,50 @@ class TotalSegmentatorDataset(Dataset):
                 continue
             m = nib.load(str(f)).get_fdata() > 0.5
             label[m] = amos_id
-        # Transpose to (D, H, W) to match AMOS22V9Dataset.
         ct = ct.transpose(2, 0, 1)
         label = label.transpose(2, 0, 1)
+        ct = self._normalize(ct)
         return ct, label
 
     def organs_in_volume(self, volume_idx: int) -> set:
-        """Lazy presence cache shared with BalancedBatchSampler."""
+        """Presence lookup shared with BalancedBatchSampler.
+
+        Reads from a precomputed disk cache when available (built by
+        `scripts/build_totalseg_presence.py`); otherwise falls back to a
+        per-organ-file probe (no CT load) and memoizes in-process.
+        """
         if not hasattr(self, "_presence_cache"):
-            self._presence_cache: dict = {}
+            self._presence_cache: dict = self._load_disk_presence_cache()
         if volume_idx in self._presence_cache:
             return self._presence_cache[volume_idx]
-        _, lab = self._load_volume(self.volume_ids[volume_idx])
-        present = set(int(v) for v in np.unique(lab) if int(v) > 0)
+        present = self._probe_presence(self.volume_ids[volume_idx])
         self._presence_cache[volume_idx] = present
+        return present
+
+    def _load_disk_presence_cache(self) -> dict:
+        cache_path = self.root / "totalsegmentator_presence.json"
+        if not cache_path.exists():
+            return {}
+        raw = json.loads(cache_path.read_text())
+        out: dict = {}
+        id_to_idx = {vid: i for i, vid in enumerate(self.volume_ids)}
+        for vid, organs in raw.items():
+            if vid in id_to_idx:
+                out[id_to_idx[vid]] = set(int(o) for o in organs)
+        return out
+
+    def _probe_presence(self, vol_id: str) -> set:
+        """Fast per-organ-file presence probe — no CT load."""
+        import nibabel as nib
+        seg_dir = self._base / vol_id / "segmentations"
+        present: set = set()
+        for ts_name, amos_id in _TS_FILENAME_TO_AMOS.items():
+            f = seg_dir / f"{ts_name}.nii.gz"
+            if not f.exists():
+                continue
+            m = nib.load(str(f)).get_fdata()
+            if (m > 0.5).any():
+                present.add(int(amos_id))
         return present
 
     def _normalize(self, img: np.ndarray) -> np.ndarray:
@@ -132,8 +174,7 @@ class TotalSegmentatorDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         vol_idx = idx // self.slabs_per_volume
         rng = np.random.default_rng(self._seed + idx * 13)
-        img, lab = self._load_volume(self.volume_ids[vol_idx])
-        img = self._normalize(img)
+        img, lab = self._load_volume(self.volume_ids[vol_idx])  # already normalized
         img_p, lab_p = self._crop_patch(img, lab, rng)
 
         K = self.N_ORGANS
