@@ -13,8 +13,8 @@
 
 ## Table of Contents
 
-1. [Headline Results](#headline-results)
-2. [What's in This Repository](#whats-in-this-repository)
+1. [Results](#results)
+2. [Repository Contents](#repository-contents)
 3. [Quick Start](#quick-start)
 4. [Reproduction Tiers](#reproduction-tiers)
    - [Tier 1 — Re-derive Every Cited Number on CPU](#tier-1--re-derive-every-cited-number-on-cpu)
@@ -22,7 +22,7 @@
    - [Tier 3 — Retrain a Seed From Scratch](#tier-3--retrain-a-seed-from-scratch)
 5. [Pre-trained Models](#pre-trained-models)
 6. [Datasets](#datasets)
-7. [Method at a Glance](#method-at-a-glance)
+7. [Method](#method)
 8. [Repository Layout](#repository-layout)
 9. [Determinism and Provenance](#determinism-and-provenance)
 10. [Citation](#citation)
@@ -31,7 +31,7 @@
 
 ---
 
-## Headline Results
+## Results
 
 All numbers evaluated on the AMOS22 validation split ($N{=}100$ volumes, liver).
 Every figure can be re-derived in under 10 seconds on CPU from the shipped
@@ -59,7 +59,7 @@ HD95 (5.52 vs 5.99 mm) and a far thinner outlier tail (max HD95 30.1 vs
 
 ---
 
-## What's in This Repository
+## Repository Contents
 
 ```
 Auto-ODE-SAM/
@@ -282,7 +282,7 @@ the list of excluded IDs is in `thesis/results/totalsegmentator_liver/excluded_v
 
 ---
 
-## Method at a Glance
+## Method
 
 Auto-ODE-SAM consists of four blocks:
 
@@ -393,7 +393,7 @@ the camera-ready is accepted.)
 
 ---
 
-*For any questions, the thesis itself documents every assumption in
+The thesis documents every assumption in
 `thesis/chapters/09_data_code_availability.tex` and the appendix
 reproducibility checklist at `thesis/chapters/A_appendix.tex`
-§ `ap:repro-checklist`.*
+§ `ap:repro-checklist`.

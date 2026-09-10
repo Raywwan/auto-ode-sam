@@ -1,7 +1,7 @@
 # OrganMoE-3D — 30-Day SOTA-Targeted Design Spec
 
 **Date:** 2026-04-25
-**Author:** Ray (with Claude)
+**Author:** Raywan Dlawar
 **Project:** VoluFormer3D V4 → new model class **OrganMoE-3D**
 **Plan window:** 30 days (2026-04-25 → 2026-05-25)
 **Hardware:** Single RTX 4090 (24 GB VRAM), Ryzen 9 5900X, 32 GB RAM

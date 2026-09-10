@@ -1,6 +1,6 @@
 # V9 — Resume Plan (as of 2026-04-22 00:20 AST)
 
-**Author:** Claude (auto-generated)
+**Author:** Raywan Dlawar
 **Status at save time:** Stage 2 v5 training task `b8sr01fhb` is at epoch 9/30. Refiner plateaued. Run will terminate when the CC session closes (local_bash task).
 
 ---

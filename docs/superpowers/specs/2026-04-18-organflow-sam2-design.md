@@ -1,7 +1,7 @@
 # VoluFormer3D V4 — OrganFlow-SAM2 Design Spec
 
 **Date:** 2026-04-18
-**Author:** Ray + Claude (Opus 4.7)
+**Author:** Raywan Dlawar
 **Status:** APPROVED — ready for implementation planning
 **Supersedes:** V3 (abandoned 2026-04-18, val_dice peaked 0.143 at ep10 then regressed)
 **Approach:** Option B — SAM2 Hiera-Tiny + MedSAM2 foundation weights

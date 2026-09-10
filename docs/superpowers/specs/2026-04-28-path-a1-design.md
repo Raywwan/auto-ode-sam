@@ -295,5 +295,5 @@ A1 is "done" (eligible for thesis writing + paper draft) when ALL of:
 ## See also
 
 - Implementation plan: `2026-04-28-path-a1-implementation-plan.md`
-- ODE novelty confirmation: `~/.claude/projects/.../memory/ode_sam_novel.md`
-- Prior MoE phase memory: `~/.claude/projects/.../memory/project_organmoe_phase_i_progress.md`
+- ODE novelty review: archived project notes outside this repository.
+- Prior MoE phase notes: archived project notes outside this repository.

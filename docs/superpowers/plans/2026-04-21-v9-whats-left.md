@@ -1,6 +1,6 @@
 # V9 — What's Left (as of 2026-04-21 22:50 AST)
 
-**Author:** auto-generated with Claude
+**Author:** Raywan Dlawar
 **Context:** Stage 1 done (proposer val 0.8433 present / 0.6548 all). Stage 2 v5 running with alignment fix. See `docs/superpowers/plans/2026-04-20-voluformer-v9-remaining.md` for the original task breakdown; this file tracks what still needs to happen to reach thesis-ready state.
 
 ---
